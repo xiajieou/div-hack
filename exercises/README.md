@@ -11,5 +11,5 @@ Start one: delete the `pytestmark = pytest.mark.skip(...)` line at the top of it
 
     pytest tests/test_ex1_blast_radius.py -q
 
-and make it green. Ask the Cursor agent in ask mode to explain, not to write. When you are done, wire the
+and make it green. Ask your AI assistant to explain, not to write. When you are done, wire the
 function into the real service (Phase 5, 6, 1 in planning/ROADMAP.md) and delete the stub's NotImplementedError.
