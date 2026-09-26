@@ -19,3 +19,7 @@ __pycache__/
 node_modules/
 dashboard/node_modules/
 dashboard/.next/
+
+# Local tooling
+.venv/
+.claude/settings.local.json
