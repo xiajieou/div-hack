@@ -12,7 +12,8 @@ The rules module (fuse/policy/rules.py) is called, never modified. The credentia
 """
 from __future__ import annotations
 import dataclasses # which turns an Outcome dataclass into a plain dict 
-from fastapi import FastAPI 
+from fastapi import Body, FastAPI 
+from .rules import Intent
 from .service import PolicyService
 import json 
 import os 
@@ -44,6 +45,11 @@ def create_app(service: PolicyService) -> FastAPI:
             "audit": service.audit.dump(),
             "history": service.ledger.history,
         }
+    
+    @app.post("/intent")
+    def intent(body: dict = Body()):
+        outcome = service.handle_intent(Intent(**body))
+        return dataclasses.asdict(outcome)
     return app 
 
 

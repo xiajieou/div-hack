@@ -16,11 +16,13 @@ from fuse.policy.rules import Intent, evaluate
 from fuse.policy.service import MULTISIGN_FEE_DROPS, PolicyService
 from fuse.setup import KeyRing, revoke_delegation, run_setup
 from fuse.signer.daemon import Refusal, SignerDaemon
+from fastapi.testclient import TestClient
+from fuse.policy.api import create_app  
 
 
 # ---------- fixtures ----------
-@pytest.fixture
-def world():
+@pytest.fixture(params=["direct", "http"])
+def world(request):
     policy = default_policy()
     ledger = LocalLedger()
     ring = KeyRing.local(ledger, policy)
@@ -30,6 +32,14 @@ def world():
     daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
                           {n: v.address for n, v in policy.allowlist.items()}, policy.fee_cap_drops, forward=service.handle_intent)
     service.attach_daemon(daemon)
+    if request.param == "http":
+        client = TestClient(create_app(service))
+
+        def forward(intent):
+            response = client.post("/intent", json=intent.public())
+            response.raise_for_status()
+        daemon._forward = forward
+
     return dict(policy=policy, ledger=ledger, ring=ring, audit=audit, service=service, daemon=daemon)
 
 
