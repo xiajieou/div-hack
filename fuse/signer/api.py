@@ -5,6 +5,9 @@ The verifier in fuse/signer/daemon.py is called, not modified.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 
@@ -12,7 +15,7 @@ from ..policy.rules import Intent
 from .daemon import Refusal, SignerDaemon
 
 
-def create_app(daemon: SignerDaemon) -> FastAPI:
+def create_app(daemon: SignerDaemon, vendors_file: str | None = None) -> FastAPI:
     app = FastAPI()
     outcomes: dict = {}
     previous = daemon._forward
@@ -37,6 +40,8 @@ def create_app(daemon: SignerDaemon) -> FastAPI:
 
     @app.post("/sign")
     def sign(body: dict = Body()):
+        if vendors_file is not None:
+            daemon.directory = json.loads(Path(vendors_file).read_text())
         try:
             return daemon.sign(body["tx"], body["nonce"])
         except Refusal as exc:

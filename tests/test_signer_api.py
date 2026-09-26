@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 import pytest
@@ -73,3 +74,35 @@ def test_vendor_route_removed(world):
     assert paths == {"/register", "/sign", "/settle", "/address"}
     response = client.post("/vendor", json={"name": "x", "address": "y"})
     assert response.status_code == 404
+
+
+def test_vendors_file_reloaded_on_sign(world, tmp_path):
+    lumen_addr = world["policy"].allowlist["Lumen Legal"].address
+    path = tmp_path / "vendors.json"
+    path.write_text(json.dumps({"Lumen Legal": lumen_addr}))
+    daemon = world["daemon"]
+    daemon._forward = lambda intent: None
+    client = TestClient(create_app(daemon, str(path)))
+    intent = Intent(vendor="Lumen Legal", amount="21.00", invoice_id="INV-0092")
+    nonce = daemon.register(intent)
+    vendor = world["policy"].allowlist["Lumen Legal"]
+    tx = build_payment(
+        treasury=world["ring"].treasury.classic_address,
+        desk=world["ring"].desk.classic_address,
+        vendor=vendor,
+        amount_xrp=Decimal("21.00"),
+        invoice_id="INV-0092",
+        commitment="00" * 32,
+        policy_hash="p",
+        fee_drops=MULTISIGN_FEE_DROPS,
+        sequence=1,
+        last_ledger_sequence=9999,
+    )
+    ok = client.post("/sign", json={"tx": tx, "nonce": nonce})
+    assert ok.status_code == 200
+    assert "Signers" in ok.json()
+    assert world["ring"].agent.seed not in ok.text
+    path.write_text(json.dumps({"Lumen Legal": world["ring"].attacker.classic_address}))
+    refused = client.post("/sign", json={"tx": tx, "nonce": nonce})
+    assert refused.status_code == 403
+    assert "Destination does not match my record" in refused.json()["reason"]
