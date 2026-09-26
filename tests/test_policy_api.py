@@ -4,7 +4,7 @@ import json
 from fastapi.testclient import TestClient
 from xrpl.models.transactions import DelegateSet
 
-from fuse.policy.api import create_app
+from fuse.policy.api import DaemonClient, _service_from_env, create_app
 from fuse.policy.rules import Intent
 from fuse.setup import _single_sign
 from tests.test_acceptance import world
@@ -96,3 +96,22 @@ def test_known_seed_absent_from_status_and_intent(world):
     world["daemon"].register(intent)
     posted = client.post("/intent", json=intent.public())
     assert seed not in posted.text
+
+
+def test_local_mode_with_daemon_url_publishes_facts_and_no_seed(tmp_path, monkeypatch):
+    agent = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("NETWORK", raising=False)
+    monkeypatch.setenv("DAEMON_URL", "http://localhost:8002")
+    monkeypatch.setenv("AGENT_ADDRESS", agent)
+    service = _service_from_env()
+    assert isinstance(service.daemon, DaemonClient)
+    assert service.daemon.address == agent
+    assert service.ledger.accounts[service.desk].signer_entries == {agent: 1, service._wallet.classic_address: 1}
+    accounts = json.loads((tmp_path / "env" / "accounts.json").read_text())
+    vendors = json.loads((tmp_path / "env" / "vendors.json").read_text())
+    assert accounts["treasury"] == service.treasury and accounts["desk"] == service.desk
+    assert vendors == {name: v.address for name, v in service.policy.allowlist.items()}
+    for text in ((tmp_path / "env" / "accounts.json").read_text(), (tmp_path / "env" / "vendors.json").read_text()):
+        assert service._wallet.seed not in text
+        assert service._wallet.private_key not in text

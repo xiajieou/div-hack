@@ -19,6 +19,7 @@ from .service import PolicyService
 import json 
 import os 
 from pathlib import Path
+from types import SimpleNamespace
 from xrpl.wallet import Wallet
 
 from ..audit import AuditChain 
@@ -86,25 +87,56 @@ def create_app(service: PolicyService) -> FastAPI:
     return app 
 
 
-def _local_service() -> PolicyService:
+def _local_service(agent_address: str | None = None) -> PolicyService:
     policy = default_policy()
     ledger = LocalLedger()
     ring = KeyRing.local(ledger, policy)
+    if agent_address:
+        # the agent key lives in the daemon process; only its address goes on the desk signer list (D17)
+        ring.agent = SimpleNamespace(classic_address=agent_address)
     run_setup(ledger, ring, delegation=True)
     audit = AuditChain(policy.hash())
     service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit)
+    vendors = {name: w.classic_address for name, w in ring.vendors.items()}
+    if agent_address:
+        _write_public_facts(ring, vendors)
+        return service
     daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
-                          {name: w.classic_address for name, w in ring.vendors.items()}, policy.fee_cap_drops, forward=service.handle_intent)
+                          vendors, policy.fee_cap_drops, forward=service.handle_intent)
     service.attach_daemon(daemon)
     return service 
 
+
+def _write_public_facts(ring: KeyRing, vendors: dict) -> None:
+    """Same shape the testnet setup script writes, so the daemon and reader read one format. Addresses only."""
+    env = Path("env")
+    env.mkdir(exist_ok=True)
+    accounts = {
+        "network": "local",
+        "treasury": ring.treasury.classic_address,
+        "desk": ring.desk.classic_address,
+        "policy": ring.policy.classic_address,
+        "attacker": ring.attacker.classic_address,
+        "northwind": ring.northwind.classic_address,
+    }
+    (env / "accounts.json").write_text(json.dumps(accounts, indent=2))
+    (env / "vendors.json").write_text(json.dumps(vendors, indent=2))
+
+
 def _service_from_env() -> PolicyService:
+    daemon_url = os.environ.get("DAEMON_URL")
     if os.environ.get("NETWORK") == "testnet":
         accounts = json.loads(Path("env/accounts.json").read_text())
         wallet = Wallet.from_seed(os.environ["POLICY_SEED"])
         policy = default_policy()
         audit = AuditChain(policy.hash())
-        return PolicyService(policy, wallet, TestnetLedger(), accounts["treasury"], accounts["desk"], audit, accounts.get("registry"))
-    return _local_service()
+        service = PolicyService(policy, wallet, TestnetLedger(), accounts["treasury"], accounts["desk"], audit, accounts.get("registry"))
+    elif daemon_url:
+        service = _local_service(os.environ["AGENT_ADDRESS"])
+    else:
+        return _local_service()
+    if daemon_url:
+        service.attach_daemon(DaemonClient(daemon_url, os.environ["AGENT_ADDRESS"]))
+    return service
 
 app = create_app(_service_from_env())
