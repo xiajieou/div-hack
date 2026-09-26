@@ -12,6 +12,7 @@ The rules module (fuse/policy/rules.py) is called, never modified. The credentia
 """
 from __future__ import annotations
 import dataclasses # which turns an Outcome dataclass into a plain dict 
+import httpx
 from fastapi import Body, FastAPI 
 from .rules import Intent
 from .service import PolicyService
@@ -25,7 +26,26 @@ from ..config import default_policy
 from ..ledger.local import LocalLedger
 from ..ledger.testnet import TestnetLedger
 from ..setup import KeyRing, run_setup
-from ..signer.daemon import SignerDaemon
+from ..signer.daemon import Refusal, SignerDaemon
+
+
+class DaemonClient:
+    """The policy side's view of a daemon in another process. Address, sign, settle; no vendor path (D18)."""
+
+    def __init__(self, base_url: str, address: str, http=None):
+        self.base_url = base_url.rstrip("/")
+        self.address = address
+        self.http = http or httpx.Client(timeout=60)
+
+    def sign(self, tx: dict, nonce: str) -> dict:
+        response = self.http.post(self.base_url + "/sign", json={"tx": tx, "nonce": nonce})
+        if response.status_code == 403:
+            raise Refusal(response.json()["reason"])
+        response.raise_for_status()
+        return response.json()
+
+    def settle(self, nonce: str) -> None:
+        self.http.post(self.base_url + "/settle", json={"nonce": nonce}).raise_for_status()
 
 
 

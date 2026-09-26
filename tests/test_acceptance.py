@@ -17,11 +17,12 @@ from fuse.policy.service import MULTISIGN_FEE_DROPS, PolicyService
 from fuse.setup import KeyRing, revoke_delegation, run_setup
 from fuse.signer.daemon import Refusal, SignerDaemon
 from fastapi.testclient import TestClient
-from fuse.policy.api import create_app  
+from fuse.policy.api import DaemonClient, create_app
+from fuse.signer.api import create_app as create_signer_app
 
 
 # ---------- fixtures ----------
-@pytest.fixture(params=["direct", "http"])
+@pytest.fixture(params=["direct", "http", "two-apps"])
 def world(request):
     policy = default_policy()
     ledger = LocalLedger()
@@ -32,13 +33,17 @@ def world(request):
     daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
                           {name: w.classic_address for name, w in ring.vendors.items()}, policy.fee_cap_drops, forward=service.handle_intent)
     service.attach_daemon(daemon)
-    if request.param == "http":
+    if request.param in ("http", "two-apps"):
         client = TestClient(create_app(service))
 
         def forward(intent):
             response = client.post("/intent", json=intent.public())
             response.raise_for_status()
         daemon._forward = forward
+    if request.param == "two-apps":
+        # policy reaches the daemon only through its HTTP app; the daemon object stays in the world for assertions
+        signer_client = TestClient(create_signer_app(daemon))
+        service.attach_daemon(DaemonClient("", ring.agent.classic_address, signer_client))
 
     return dict(policy=policy, ledger=ledger, ring=ring, audit=audit, service=service, daemon=daemon)
 
