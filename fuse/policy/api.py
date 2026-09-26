@@ -10,4 +10,62 @@ Endpoints to build (FastAPI):
     GET  /status          outcomes, audit rows, ledger history for the dashboard
 The rules module (fuse/policy/rules.py) is called, never modified. The credential hook is fuse/policy/credentials.py.
 """
-raise NotImplementedError("Phase 2: wrap fuse.policy.service.PolicyService in a FastAPI app")
+from __future__ import annotations
+import dataclasses # which turns an Outcome dataclass into a plain dict 
+from fastapi import FastAPI 
+from .service import PolicyService
+import json 
+import os 
+from pathlib import Path
+from xrpl.wallet import Wallet
+
+from ..audit import AuditChain 
+from ..config import default_policy
+from ..ledger.local import LocalLedger
+from ..ledger.testnet import TestnetLedger
+from ..setup import KeyRing, run_setup
+from ..signer.daemon import SignerDaemon
+
+
+
+def create_app(service: PolicyService) -> FastAPI:
+    app = FastAPI()
+
+    @app.get("/status")
+    def status():
+        return {
+            "policy_hash": service.policy.hash(),
+            "accounts": {"treasury": service.treasury, "desk": service.desk},
+            "balances": {
+                "treasury": service.ledger.balance_xrp(service.treasury),
+                "desk": service.ledger.balance_xrp(service.desk),
+            },
+            "outcomes": [dataclasses.asdict(o) for o in service.outcomes.values()],
+            "audit": service.audit.dump(),
+            "history": service.ledger.history,
+        }
+    return app 
+
+
+def _local_service() -> PolicyService:
+    policy = default_policy()
+    ledger = LocalLedger()
+    ring = KeyRing.local(ledger, policy)
+    run_setup(ledger, ring, delegation=True)
+    audit = AuditChain(policy.hash())
+    service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit)
+    daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
+                          {n: v.address for n, v in policy.allowlist.items()}, policy.fee_cap_drops, forward=service.handle_intent)
+    service.attach_daemon(daemon)
+    return service 
+
+def _service_from_env() -> PolicyService:
+    if os.environ.get("NETWORK") == "testnet":
+        accounts = json.loads(Path("env/accounts.json").read_text())
+        wallet = Wallet.from_seed(os.environ["POLICY_SEED"])
+        policy = default_policy()
+        audit = AuditChain(policy.hash())
+        return PolicyService(policy, wallet, TestnetLedger(), accounts["treasury"], accounts["desk"], audit)
+    return _local_service()
+
+app = create_app(_service_from_env())
