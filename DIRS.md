@@ -15,6 +15,6 @@
 | `demo/backup/` | Browser demo, the fallback if testnet is down on stage | none |
 | `pitch/` | Pitch outline and slides | Front |
 | `inbox/` `env/` `data/` `break-glass/` | Runtime folders, gitignored | none |
-| `planning/` | Spec, roadmap, decisions; gitignored, shared on the drive | none |
+| `planning/` | Spec, roadmap, decisions. Not in this repo on purpose, so clones and cloud agents will not have it; get it from the team drive and drop it in here | none |
 
 Owners: Ledger @isnahos · Core @xiajieou · Front @longlostt
