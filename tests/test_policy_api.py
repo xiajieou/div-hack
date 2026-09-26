@@ -74,3 +74,24 @@ def test_submit_file_revokes_then_payment_rejected(world, tmp_path, monkeypatch)
     body = client.post("/intent", json=intent.public()).json()
     assert body["status"] == "rejected_by_ledger"
     assert body["engine_result"] == "tecNO_DELEGATE_PERMISSION"
+
+
+def test_missing_credential_refuses_before_reservation(world, monkeypatch):
+    monkeypatch.setattr("fuse.policy.service.vendor_has_accepted_credential", lambda ledger, address, registry: False)
+    intent = Intent(vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201", nonce="cred")
+    outcome = world["service"].handle_intent(intent)
+    assert outcome.status == "refused"
+    assert any("accepted registry credential" in f for f in outcome.failed)
+    assert world["service"].budget.committed_drops() == 0
+
+
+def test_known_seed_absent_from_status_and_intent(world):
+    seed = world["ring"].policy.seed
+    client = TestClient(create_app(world["service"]))
+    status = client.get("/status")
+    assert seed not in status.text
+    intent = Intent(vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
+    world["daemon"]._forward = lambda intent: None
+    world["daemon"].register(intent)
+    posted = client.post("/intent", json=intent.public())
+    assert seed not in posted.text

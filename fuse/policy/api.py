@@ -84,7 +84,7 @@ def _service_from_env() -> PolicyService:
         wallet = Wallet.from_seed(os.environ["POLICY_SEED"])
         policy = default_policy()
         audit = AuditChain(policy.hash())
-        return PolicyService(policy, wallet, TestnetLedger(), accounts["treasury"], accounts["desk"], audit)
+        return PolicyService(policy, wallet, TestnetLedger(), accounts["treasury"], accounts["desk"], audit, accounts.get("registry"))
     return _local_service()
 
 app = create_app(_service_from_env())

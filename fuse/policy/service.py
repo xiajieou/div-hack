@@ -16,6 +16,7 @@ from ..audit import AuditChain
 from ..budget import Budget, BudgetError
 from ..config import Policy, VendorRecord, drops_to_xrp, xrp_to_drops
 from .builder import build_payment, same_transaction, strip_signatures
+from .credentials import vendor_has_accepted_credential
 from .rules import Evaluation, Intent, evaluate
 
 MULTISIGN_FEE_DROPS = 36        # base fee x (1 + 2 signers), rounded up
@@ -35,13 +36,14 @@ class Outcome:
 
 
 class PolicyService:
-    def __init__(self, policy: Policy, policy_wallet: Wallet, ledger, treasury: str, desk: Optional[str], audit: AuditChain) -> None:
+    def __init__(self, policy: Policy, policy_wallet: Wallet, ledger, treasury: str, desk: Optional[str], audit: AuditChain, registry: Optional[str] = None) -> None:
         self.policy = policy
         self._wallet = policy_wallet                    # never leaves this object
         self.address = policy_wallet.classic_address
         self.ledger = ledger
         self.treasury = treasury
         self.desk = desk                                # None = multisig-only fallback
+        self.registry = registry
         self.audit = audit
         self.budget = Budget(int(xrp_to_drops(policy.daily_cap_xrp)), policy.per_hour_max_payments)
         self.paid_invoices: Set[str] = set()
@@ -71,6 +73,13 @@ class PolicyService:
             return self._done(intent, Outcome("parked", intent.public(), rules, message="Parked. A human must add the vendor; the intent then reruns."))
 
         amount = Decimal(intent.amount)
+        vendor: VendorRecord = self.policy.allowlist[intent.vendor]
+        if not vendor_has_accepted_credential(self.ledger, vendor.address, self.registry):
+            failed = ["vendor holds an accepted registry credential"]
+            rules.append({"rule": failed[0], "ok": False, "soft": False, "note": ""})
+            self.audit.refused(intent.public(), failed)
+            return self._done(intent, Outcome("refused", intent.public(), rules, failed, message="No signature exists; nothing to submit."))
+
         try:
             reservation = self.budget.reserve(int(xrp_to_drops(amount)))
         except BudgetError as e:
@@ -78,7 +87,6 @@ class PolicyService:
             self.audit.refused(intent.public(), failed)
             return self._done(intent, Outcome("refused", intent.public(), rules, failed, message="Refused at reservation time."))
 
-        vendor: VendorRecord = self.policy.allowlist[intent.vendor]
         with self._submit_lock:                      # sequence assignment through submission, one at a time
             self.in_flight.add(intent.invoice_id)
             try:
