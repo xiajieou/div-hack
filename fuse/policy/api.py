@@ -56,6 +56,13 @@ def create_app(service: PolicyService) -> FastAPI:
         reruns = service.admin_add_vendor(body["name"], body["address"], body["jurisdiction"], body.get("actor", "human"))
         return [dataclasses.asdict(o) for o in reruns]
 
+    @app.post("/submit-file")
+    def submit_file():
+        path = Path(os.environ.get("BREAK_GLASS_FILE", "break-glass/revoke.json"))
+        blob = json.loads(path.read_text())
+        result = service.ledger.submit(blob)
+        return {"engine_result": result.engine_result, "hash": result.hash}
+
     return app 
 
 

@@ -1,9 +1,12 @@
 import dataclasses
+import json
 
 from fastapi.testclient import TestClient
+from xrpl.models.transactions import DelegateSet
 
 from fuse.policy.api import create_app
 from fuse.policy.rules import Intent
+from fuse.setup import _single_sign
 from tests.test_acceptance import world
 
 
@@ -45,3 +48,29 @@ def test_admin_add_vendor_reruns_parked(world):
     assert response.status_code == 200
     assert len(body) == 1 and body[0]["status"] == "paid"
     assert any(row["kind"] == "admin" for row in service.audit.dump())
+
+
+def test_submit_file_revokes_then_payment_rejected(world, tmp_path, monkeypatch):
+    service = world["service"]
+    ring = world["ring"]
+    ledger = world["ledger"]
+    client = TestClient(create_app(service))
+    lls = ledger.current_ledger_index() + 200
+    blob = _single_sign(
+        DelegateSet(account=ring.treasury.classic_address, authorize=ring.desk.classic_address, permissions=[]),
+        ring.treasury,
+        ledger.next_sequence(ring.treasury.classic_address),
+        lls,
+    )
+    path = tmp_path / "revoke.json"
+    path.write_text(json.dumps(blob))
+    monkeypatch.setenv("BREAK_GLASS_FILE", str(path))
+    submitted = client.post("/submit-file")
+    assert submitted.status_code == 200
+    assert submitted.json()["engine_result"] == "tesSUCCESS"
+    intent = Intent(vendor="Harbor Cloud Hosting", amount="5.00", invoice_id="INV-3300")
+    world["daemon"]._forward = lambda intent: None
+    world["daemon"].register(intent)
+    body = client.post("/intent", json=intent.public()).json()
+    assert body["status"] == "rejected_by_ledger"
+    assert body["engine_result"] == "tecNO_DELEGATE_PERMISSION"
