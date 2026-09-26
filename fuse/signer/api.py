@@ -5,11 +5,13 @@ The verifier in fuse/signer/daemon.py is called, not modified.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
 
 import httpx
+import uvicorn
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from xrpl.wallet import Wallet
@@ -84,3 +86,41 @@ def build_daemon_from_env() -> SignerDaemon:
         default_policy().fee_cap_drops,
         forward,
     )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8002)
+    args = parser.parse_args()
+    vendors_file = os.environ.get("VENDORS_FILE", "env/vendors.json")
+    holder = {"daemon": None}
+
+    def loader() -> SignerDaemon:
+        if holder["daemon"] is None:
+            holder["daemon"] = build_daemon_from_env()
+        return holder["daemon"]
+
+    # env/accounts.json is read on the first request, so this process can start before policy writes it.
+    uvicorn.run(_lazy_app(loader, vendors_file), host="127.0.0.1", port=args.port)
+
+
+def _lazy_app(loader, vendors_file=None):
+    holder = {"app": None}
+
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            # answer startup/shutdown ourselves so the loader waits for the first real request
+            while True:
+                message = await receive()
+                await send({"type": message["type"] + ".complete"})
+                if message["type"] == "lifespan.shutdown":
+                    return
+        if holder["app"] is None:
+            holder["app"] = create_app(loader(), vendors_file)
+        await holder["app"](scope, receive, send)
+
+    return app
+
+
+if __name__ == "__main__":
+    main()
