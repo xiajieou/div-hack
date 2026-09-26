@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from fuse.policy.builder import build_payment
 from fuse.policy.rules import Intent
 from fuse.policy.service import MULTISIGN_FEE_DROPS
-from fuse.signer.api import create_app
+from fuse.signer.api import build_daemon_from_env, create_app
 from tests.test_acceptance import MUTATIONS, world
 
 
@@ -106,3 +106,23 @@ def test_vendors_file_reloaded_on_sign(world, tmp_path):
     refused = client.post("/sign", json={"tx": tx, "nonce": nonce})
     assert refused.status_code == 403
     assert "Destination does not match my record" in refused.json()["reason"]
+
+
+def test_build_daemon_from_env_ignores_accounts_vendors(world, tmp_path, monkeypatch):
+    lumen_addr = world["policy"].allowlist["Lumen Legal"].address
+    accounts = {
+        "treasury": world["ring"].treasury.classic_address,
+        "desk": world["ring"].desk.classic_address,
+        "vendors": {"Lumen Legal": world["ring"].attacker.classic_address},
+    }
+    vendors = {"Lumen Legal": lumen_addr}
+    accounts_path = tmp_path / "accounts.json"
+    vendors_path = tmp_path / "vendors.json"
+    accounts_path.write_text(json.dumps(accounts))
+    vendors_path.write_text(json.dumps(vendors))
+    monkeypatch.setenv("ACCOUNTS_FILE", str(accounts_path))
+    monkeypatch.setenv("VENDORS_FILE", str(vendors_path))
+    monkeypatch.setenv("AGENT_SEED", world["ring"].agent.seed)
+    daemon = build_daemon_from_env()
+    assert daemon.directory == vendors
+    assert daemon.address == world["ring"].agent.classic_address
