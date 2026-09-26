@@ -210,7 +210,8 @@ class LocalLedger:
 
     def _record(self, r: Result, tx: dict) -> Result:
         self.history.append({"result": r.engine_result, "hash": r.hash, "type": tx.get("TransactionType"),
-                             "account": tx.get("Account"), "delegate": tx.get("Delegate"), "ledger": self.ledger_index})
+                             "account": tx.get("Account"), "delegate": tx.get("Delegate"), "ledger": self.ledger_index,
+                             "destination": tx.get("Destination", ""), "amount": tx.get("Amount")})
         return r
 
     # ----- explorer-style view -----

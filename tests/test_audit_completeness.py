@@ -34,3 +34,12 @@ def test_failed_attempts_are_never_flagged():
 def test_order_is_history_order():
     missing = unlogged_payments(HISTORY, set(), SPEND)
     assert [m["hash"] for m in missing] == ["H3", "H4", "H7"]
+
+
+def test_local_ledger_flags_exactly_the_attackers_payments():
+    from fuse.reports.sources import LocalWorld
+    world = LocalWorld(attack=True)
+    spend = world.addresses["spend"]
+    missing = unlogged_payments(world.history(spend), world.log_hashes(), spend)
+    assert len(missing) == 2
+    assert all(m["amount_drops"] == 100_000_000 and m["delegate"] == world.addresses["desk"] for m in missing)

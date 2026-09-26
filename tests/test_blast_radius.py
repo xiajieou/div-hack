@@ -53,3 +53,39 @@ def test_quorum_one_means_one_key_is_enough():
     assert any("quorum" in f.text.lower() for f in findings)
     loss = {r.part: r.max_loss_drops for r in rows}
     assert loss["agent key"] == 30_000_000
+
+
+def test_signer_list_on_spend_account_is_a_finding():
+    snap = {**CLEAN, "spend": {**CLEAN["spend"], "signers": {"rAgent": 1}}}
+    _, findings = blast_radius(snap)
+    assert any("signer list" in f.text for f in findings)
+
+
+def test_treasury_delegate_is_a_finding():
+    snap = {**CLEAN, "treasury": {"address": "rTreasury", "delegations": {"rDesk": ["Payment"]}}}
+    _, findings = blast_radius(snap)
+    assert any("treasury has delegates" in f.text for f in findings)
+
+
+def test_paying_straight_from_treasury_is_a_finding():
+    snap = {**CLEAN, "spend": {**CLEAN["spend"], "address": "rSame"}, "treasury": {"address": "rSame"}}
+    _, findings = blast_radius(snap)
+    assert any("straight from the treasury" in f.text for f in findings)
+
+
+def test_revoked_delegation_means_both_keys_move_nothing():
+    snap = {**CLEAN, "spend": {**CLEAN["spend"], "delegations": {}}}
+    rows, findings = blast_radius(snap)
+    assert findings == []
+    loss = {r.part: r.max_loss_drops for r in rows}
+    assert loss["agent+policy keys"] == 0
+    assert loss["spend account key"] == 30_000_000
+
+
+def test_local_ledger_setup_has_no_findings():
+    from fuse.reports.blast_radius import read_snapshot
+    from fuse.reports.sources import LocalWorld
+    world = LocalWorld(attack=False)
+    rows, findings = blast_radius(read_snapshot(world, world.addresses))
+    assert findings == []
+    assert {r.part: r.max_loss_drops for r in rows}["agent key"] == 0
