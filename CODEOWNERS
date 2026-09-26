@@ -1,26 +1,27 @@
-# Replace the handles. One owner per path; the owner reads every diff that lands there.
+# One owner per path; the owner reads every diff that lands there.
 # Ledger
-scripts/                       @xiajieou
-fuse/setup.py                  @xiajieou
-fuse/ledger/testnet.py         @xiajieou
-fuse/breakglass.py             @xiajieou
-exercises/ex3_break_glass.py   @xiajieou
+scripts/                       @isnahos
+fuse/setup.py                  @isnahos
+fuse/ledger/testnet.py         @isnahos
+fuse/breakglass.py             @isnahos
+exercises/ex3_break_glass.py   @isnahos
 # Core services
-fuse/policy/                   @teammate-core
-fuse/signer/                   @teammate-core
-fuse/reader/                   @teammate-core
-fuse/audit.py                  @teammate-core
-fuse/budget.py                 @teammate-core
-fuse/ledger/local.py           @teammate-core
-tests/test_acceptance.py       @teammate-core
+fuse/policy/                   @xiajieou
+fuse/signer/                   @xiajieou
+fuse/reader/                   @xiajieou
+fuse/audit.py                  @xiajieou
+fuse/budget.py                 @xiajieou
+fuse/ledger/local.py           @xiajieou
+tests/test_acceptance.py       @xiajieou
 # Front
-dashboard/                     @teammate-front
-fuse/reports/                  @teammate-front
-exercises/ex1_blast_radius.py  @teammate-front
-exercises/ex2_audit_completeness.py @teammate-front
-pitch/                         @teammate-front
-README.md                      @teammate-front
+dashboard/                     @longlostt
+fuse/reports/                  @longlostt
+exercises/ex1_blast_radius.py  @longlostt
+exercises/ex2_audit_completeness.py @longlostt
+pitch/                         @longlostt
+README.md                      @longlostt
 # Shared brain: change it in one commit, tell the other two
 CLAUDE.md                      @xiajieou
 AGENTS.md                      @xiajieou
 .cursorrules                   @xiajieou
+DIRS.md                        @xiajieou
