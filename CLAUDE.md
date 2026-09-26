@@ -65,6 +65,7 @@ The dashboard's kill switch button submits this file. **The dashboard never hold
 - Destinations come ONLY from the policy service's vendor records. Never from reader output.
 - Built payments must NOT set the partial-payment flag, `Paths`, or `SendMax`.
 - The daemon signs only exact matches to a stored intent. No "close enough."
+- The daemon's vendor directory is loaded from its own file on the daemon's host (`VENDORS_FILE`); the policy service has no path to change it. Adding a vendor is two separate actions.
 - Keys never enter the LLM's context, prompts, logs, or the dashboard.
 - Rule checks live in the policy service, never only in the reader.
 - The credential requirement is code, not configuration. No admin setting may disable it. Admins may edit the vendor list and caps only.
