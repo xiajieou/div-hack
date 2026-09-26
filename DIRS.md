@@ -14,6 +14,7 @@
 | `dashboard/` | Status page over the policy API; holds no keys | Front |
 | `demo/backup/` | Browser demo, the fallback if testnet is down on stage | none |
 | `pitch/` | Pitch outline and slides | Front |
+| `docs/` | System design diagram (PNG shown in the README, SVG source) | none |
 | `inbox/` `env/` `data/` `break-glass/` | Runtime folders, gitignored | none |
 | `planning/` | Spec, roadmap, decisions. Not in this repo on purpose, so clones and cloud agents will not have it; get it from the team drive and drop it in here | none |
 
