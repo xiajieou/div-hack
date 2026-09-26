@@ -50,6 +50,12 @@ def create_app(service: PolicyService) -> FastAPI:
     def intent(body: dict = Body()):
         outcome = service.handle_intent(Intent(**body))
         return dataclasses.asdict(outcome)
+
+    @app.post("/admin/vendor")
+    def admin_vendor(body: dict = Body()):
+        reruns = service.admin_add_vendor(body["name"], body["address"], body["jurisdiction"], body.get("actor", "human"))
+        return [dataclasses.asdict(o) for o in reruns]
+
     return app 
 
 
