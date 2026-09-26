@@ -1,8 +1,5 @@
-import pytest
+from fuse.reports.blast_radius import blast_radius
 
-from exercises.ex1_blast_radius import blast_radius
-
-pytestmark = pytest.mark.skip(reason="exercise 1: delete this line and implement blast_radius")
 
 CLEAN = {
     "float_drops": 30_000_000,

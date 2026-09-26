@@ -1,8 +1,5 @@
-import pytest
+from fuse.reports.audit_completeness import unlogged_payments
 
-from exercises.ex2_audit_completeness import unlogged_payments
-
-pytestmark = pytest.mark.skip(reason="exercise 2: delete this line and implement unlogged_payments")
 
 SPEND = "rSpend"
 HISTORY = [

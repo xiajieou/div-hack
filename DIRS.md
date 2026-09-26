@@ -9,8 +9,7 @@
 | `fuse/reader/` | Untrusted invoice reader and fixtures | Core |
 | `fuse/reports/` | Blast radius and audit completeness reports | Front |
 | `scripts/` | Testnet setup, top-up, kill switch, credentials, Phase 0 spike | Ledger |
-| `exercises/` | Three hand-written pieces with pre-written tests | Front (ex1, ex2), Ledger (ex3) |
-| `tests/` | Acceptance tests and exercise tests | Core |
+| `tests/` | Acceptance tests, plus tests for the reports and the break-glass file | Core |
 | `dashboard/` | Status page over the policy API; holds no keys | Front |
 | `demo/backup/` | Browser demo, the fallback if testnet is down on stage | none |
 | `pitch/` | Pitch outline and slides | Front |

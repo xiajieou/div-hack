@@ -1,10 +1,19 @@
-"""Audit completeness check. Phase 6, owner: Front, after exercise 2 is green.
+"""Audit completeness check. The hash chain proves nothing was edited; this proves nothing was left out.
 
-Read-only: account_tx over the spend account, filtered to outgoing Payment transactions with result tesSUCCESS
-(planning/DECISIONS.md D5), matched by hash to the audit log's result rows. Prints the payments the log never saw.
-Boundary: pytest tests/test_ex2_audit_completeness.py -q; after the stolen-keys scene it flags exactly the
-attacker's payments.
+unlogged_payments() is pure. history is the spend account's ledger transactions, each a dict with
+{"type", "account", "delegate", "destination", "result", "hash", "amount_drops"}; log_tx_hashes is the set of
+transaction hashes the audit log has a result row for.
 
-    python -m fuse.reports.audit_completeness --mode local|testnet
+A real payment is an outgoing Payment (account == spend_address) with result tesSUCCESS. Incoming top-ups, failed
+attempts and other transaction types are ignored. It does not filter by SourceTag: an attacker will not tag anything.
+Returns the real payments with no log entry, in history order.
 """
-from exercises.ex2_audit_completeness import unlogged_payments  # noqa: F401
+from __future__ import annotations
+
+from typing import Iterable, List, Set
+
+
+def unlogged_payments(history: Iterable[dict], log_tx_hashes: Set[str], spend_address: str) -> List[dict]:
+    return [tx for tx in history
+            if tx["type"] == "Payment" and tx["account"] == spend_address
+            and tx["result"] == "tesSUCCESS" and tx["hash"] not in log_tx_hashes]

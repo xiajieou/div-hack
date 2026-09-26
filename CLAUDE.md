@@ -147,7 +147,7 @@ Ownership is one person per path (see CODEOWNERS). The owner reads every diff th
 fuse/                             the package
   config.py                       policy as data: caps, allowlist, jurisdictions, RLUSD flag     Core
   setup.py                        accounts, DelegateSet, SignerListSet, master off, revoke       Ledger
-  breakglass.py                   Ticket-based pre-signed revocation (exercise 3 wired in)       Ledger
+  breakglass.py                   Ticket-based pre-signed revocation                             Ledger
   ledger/local.py                 mini-ledger for tests: real signature, quorum, delegation checks   Core
   ledger/testnet.py               xrpl-py adapter, same interface (untested until the spike)     Ledger
   policy/rules.py                 the rules; human-owned, no agent edits                          Core
@@ -158,8 +158,8 @@ fuse/                             the package
   signer/daemon.py                agent key + intent table; verifier human-owned                  Core
   signer/api.py                   daemon over HTTP (Phase 3)                                       Core
   reader/reader.py                untrusted reader and invoice fixtures (Phase 3 makes it a process)   Core
-  reports/blast_radius.py         exercise 1 wired in (Phase 5)                                    Front
-  reports/audit_completeness.py   exercise 2 wired in (Phase 6)                                    Front
+  reports/blast_radius.py         worst case per compromised part, setup findings (Phase 5)       Front
+  reports/audit_completeness.py   ledger payments missing from the audit log (Phase 6)            Front
   audit.py, budget.py             hash chain; atomic reservations                                  Core
   demo.py                         local demo; doubles as the integration test                     Core
 scripts/spike/run.py              Phase 0, raced in two worktrees, throwaway                       Ledger
@@ -167,8 +167,7 @@ scripts/setup_testnet.py          Phase 1: fund, delegate, signer list, ticket, 
 scripts/topup.py                  human-signed top-up (demo scene 5)                               Ledger
 scripts/kill_switch.py            submits break-glass/revoke.json; holds no key                    Ledger
 scripts/credentials.py            Phase 7: registry issues, vendors accept                         whoever finishes first
-exercises/                        the three human-implemented pieces with pre-written tests        ex1, ex2 Front; ex3 Ledger
-tests/                            test_acceptance.py (AC3–AC16), test_ex1/2/3                      Core owns test_acceptance.py
+tests/                            test_acceptance.py (AC3–AC16), blast radius, audit, break-glass  Core owns test_acceptance.py
 dashboard/                        Phase 4; holds no keys                                           Front
 demo/backup/fuse-live-demo.html   browser demo in xrpl.js; the fallback if testnet is down on stage
 pitch/                            outline and slides (Phase 8)                                     Front
@@ -176,7 +175,7 @@ planning/                         SPEC, ROADMAP, DECISIONS, CATCHUP, LEARN, PROM
 inbox/ env/ data/ break-glass/    runtime folders, gitignored; env/accounts.json is written by setup
 ```
 
-Commands (Makefile): `make install` · `make test` · `make demo-local` · `make spike` · `make setup-testnet` · `make topup` · `make kill` · `make policy` / `make daemon` / `make reader` (three terminals) · `make blast` · `make audit-check`. Tests: `pytest -q` (31 acceptance tests pass; 14 exercise tests are skipped until a person starts them by deleting the skip line).
+Commands (Makefile): `make install` · `make test` · `make demo-local` · `make spike` · `make setup-testnet` · `make topup` · `make kill` · `make policy` / `make daemon` / `make reader` (three terminals) · `make blast` · `make audit-check`. Tests: `pytest -q` (42 pass; the 3 break-glass tests are skipped until fuse/breakglass.py is implemented).
 
 Session protocol: start by reading planning/CATCHUP.md and the current phase in planning/ROADMAP.md; end by updating CATCHUP.md (where we are, what is green with the boundary command's output, what is broken, the next single step and its owner). Prompts for every phase, the race, the rematch and the sweeps are in planning/PROMPTS.md.
 
