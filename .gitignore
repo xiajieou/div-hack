@@ -1,0 +1,21 @@
+# Local-only planning notes (not published)
+planning/
+RESEARCH.md
+
+# Secrets and runtime state
+.env
+env/*
+!env/.gitkeep
+data/*
+!data/.gitkeep
+break-glass/*
+!break-glass/.gitkeep
+inbox/*
+!inbox/.gitkeep
+*.seed
+
+__pycache__/
+.pytest_cache/
+node_modules/
+dashboard/node_modules/
+dashboard/.next/

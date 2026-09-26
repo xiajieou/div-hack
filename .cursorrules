@@ -1,0 +1,9 @@
+Read and follow CLAUDE.md before anything else.
+
+Never create plan files, scratchpads, summaries or docs unless the task asks for them by name.
+No emojis anywhere.
+Minimal comments in a plain human voice. No "changed by AI", no TODO litter, no explanations of obvious code.
+Match the existing style of the file you are in. Avoid the over-engineered AI look: no abstractions for one caller, no defensive checks for impossible states, no new dependencies unless the task is impossible without one.
+Execute directly. Do not ask for permission per step. Stop and report only when the task needs rules.py or the signer verifier changed, or when a test cannot be made to fail.
+Leave zero scaffolding behind: no leftover files, no sample data outside fixtures, no phase or exercise references in shipped code.
+Append the prompt contract from CLAUDE.md to your own understanding of every task: smallest clean change, no unrelated edits, run the named checks and paste the output.

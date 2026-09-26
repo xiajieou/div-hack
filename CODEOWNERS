@@ -1,0 +1,26 @@
+# Replace the handles. One owner per path; the owner reads every diff that lands there.
+# Ledger
+scripts/                       @xiajieou
+fuse/setup.py                  @xiajieou
+fuse/ledger/testnet.py         @xiajieou
+fuse/breakglass.py             @xiajieou
+exercises/ex3_break_glass.py   @xiajieou
+# Core services
+fuse/policy/                   @teammate-core
+fuse/signer/                   @teammate-core
+fuse/reader/                   @teammate-core
+fuse/audit.py                  @teammate-core
+fuse/budget.py                 @teammate-core
+fuse/ledger/local.py           @teammate-core
+tests/test_acceptance.py       @teammate-core
+# Front
+dashboard/                     @teammate-front
+fuse/reports/                  @teammate-front
+exercises/ex1_blast_radius.py  @teammate-front
+exercises/ex2_audit_completeness.py @teammate-front
+pitch/                         @teammate-front
+README.md                      @teammate-front
+# Shared brain: change it in one commit, tell the other two
+CLAUDE.md                      @xiajieou
+AGENTS.md                      @xiajieou
+.cursorrules                   @xiajieou
