@@ -38,6 +38,7 @@ def test_admin_add_vendor_reruns_parked(world):
     world["daemon"].register(intent)
     parked = client.post("/intent", json=intent.public())
     assert parked.json()["status"] == "parked"
+    world["daemon"].add_vendor("Northwind Freight", world["ring"].northwind.classic_address)
     response = client.post("/admin/vendor", json={
         "name": "Northwind Freight",
         "address": world["ring"].northwind.classic_address,

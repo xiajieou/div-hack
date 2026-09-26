@@ -74,7 +74,7 @@ def _local_service() -> PolicyService:
     audit = AuditChain(policy.hash())
     service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit)
     daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
-                          {n: v.address for n, v in policy.allowlist.items()}, policy.fee_cap_drops, forward=service.handle_intent)
+                          {name: w.classic_address for name, w in ring.vendors.items()}, policy.fee_cap_drops, forward=service.handle_intent)
     service.attach_daemon(daemon)
     return service 
 

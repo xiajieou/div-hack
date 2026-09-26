@@ -30,7 +30,7 @@ def world(request):
     audit = AuditChain(policy.hash())
     service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit)
     daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
-                          {n: v.address for n, v in policy.allowlist.items()}, policy.fee_cap_drops, forward=service.handle_intent)
+                          {name: w.classic_address for name, w in ring.vendors.items()}, policy.fee_cap_drops, forward=service.handle_intent)
     service.attach_daemon(daemon)
     if request.param == "http":
         client = TestClient(create_app(service))
@@ -100,6 +100,7 @@ def test_ac06_duplicate_invoice_refused(world):
 def test_ac07_unknown_vendor_parked_then_rerun(world):
     o = run_intent(world, vendor="Northwind Freight", amount="6.40", invoice_id="INV-5510")
     assert o.status == "parked"
+    world["daemon"].add_vendor("Northwind Freight", world["ring"].northwind.classic_address)
     reruns = world["service"].admin_add_vendor("Northwind Freight", world["ring"].northwind.classic_address, "US")
     assert len(reruns) == 1 and reruns[0].status == "paid"
     assert any(r.kind == "admin" for r in world["audit"].rows)
@@ -152,6 +153,21 @@ def test_ac08_unknown_and_settled_nonce_refused(world):
     world["daemon"].settle(nonce)
     with pytest.raises(Refusal):
         world["daemon"].sign(tx, nonce)
+
+
+def test_policy_vendor_swap_refused_by_daemon(world):
+    world["daemon"].add_vendor("Northwind Freight", world["ring"].northwind.classic_address)
+    o = run_intent(world, vendor="Northwind Freight", amount="6.40", invoice_id="INV-5510")
+    assert o.status == "parked"
+    before = len(world["ledger"].history)
+    attacker_before = world["ledger"].balance_xrp(world["ring"].attacker.classic_address)
+    reruns = world["service"].admin_add_vendor(
+        "Northwind Freight", world["ring"].attacker.classic_address, "US"
+    )
+    assert len(reruns) == 1 and reruns[0].status == "refused"
+    assert any("Destination does not match my record" in f for f in reruns[0].failed)
+    assert len(world["ledger"].history) == before
+    assert world["ledger"].balance_xrp(world["ring"].attacker.classic_address) == attacker_before
 
 
 # ---------- AC9: a non-Payment from the desk on the treasury is rejected by the ledger ----------

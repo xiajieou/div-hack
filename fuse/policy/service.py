@@ -139,7 +139,6 @@ class PolicyService:
     # ----- admin path (logged, human-only) -----
     def admin_add_vendor(self, name: str, address: str, jurisdiction: str, actor: str = "human") -> List[Outcome]:
         self.policy.allowlist[name] = VendorRecord(name, address, jurisdiction)
-        self.daemon.add_vendor(name, address)
         self.audit.admin("add_vendor", {"actor": actor, "vendor": name, "address": address, "jurisdiction": jurisdiction,
                                          "new_policy_hash": self.policy.hash()})
         reruns = []

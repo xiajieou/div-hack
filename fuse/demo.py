@@ -98,7 +98,8 @@ def main(argv=None) -> int:
 
     audit = AuditChain(policy.hash())
     service = PolicyService(policy, ring.policy, ledger, treasury_addr, desk_addr, audit)
-    daemon = SignerDaemon(ring.agent, treasury_addr, desk_addr, {n: v.address for n, v in policy.allowlist.items()},
+    daemon = SignerDaemon(ring.agent, treasury_addr, desk_addr,
+                          {name: w.classic_address for name, w in ring.vendors.items()},
                           policy.fee_cap_drops, forward=service.handle_intent)
     service.attach_daemon(daemon)
 
@@ -163,6 +164,7 @@ def main(argv=None) -> int:
     o, _ = process("inv_5510_northwind.txt")
     show_outcome(o, ledger)
     print("  → a human adds Northwind Freight to the allowlist (logged), and the parked intent reruns:")
+    daemon.add_vendor("Northwind Freight", ring.northwind.classic_address)
     reruns = service.admin_add_vendor("Northwind Freight", ring.northwind.classic_address, "US", actor="cfo@company")
     for o2 in reruns:
         show_outcome(o2, ledger)
