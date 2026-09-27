@@ -3,7 +3,8 @@
 Funds treasury, spend, desk, registry, vendors and the attacker from the faucet; the spend account keeps only the
 float and returns the rest to the treasury (no program signs with the treasury key); spend delegates Payment only
 to the desk; the desk sets its signer list (agent + policy, quorum 2) and disables its master key; the result is
-read back from the ledger and checked; then writes env/accounts.json (addresses only) and the seeds to .env.
+read back from the ledger and checked; then writes env/accounts.json and env/vendors.json (addresses only) and
+the seeds plus AGENT_ADDRESS to .env.
 The desk seed is never saved: once its master key is off it is useless.
 
     py -3.13 scripts/setup_testnet.py [--float 30] [--net devnet]
@@ -166,9 +167,12 @@ def main():
     }
     out = ROOT / "env" / "accounts.json"
     out.write_text(json.dumps(accounts, indent=2) + "\n")
+    # the signer daemon's vendor directory, same shape the local mode writes
+    (ROOT / "env" / "vendors.json").write_text(json.dumps(accounts["vendors"], indent=2) + "\n")
 
     env = write_env({
         "NETWORK": args.net,
+        "AGENT_ADDRESS": w["agent"].classic_address,
         "TREASURY_SEED": w["treasury"].seed, "SPEND_SEED": w["spend"].seed, "AGENT_SEED": w["agent"].seed,
         "POLICY_SEED": w["policy"].seed, "REGISTRY_SEED": w["registry"].seed,
         **{env_name(name): wallet.seed for name, wallet in vendors.items()},
@@ -181,7 +185,7 @@ def main():
         print(f"  {name:22} {accounts[name]}  (signer key, unfunded)")
     for name, addr in [*accounts["vendors"].items(), ("northwind (not listed)", accounts["northwind"]), ("attacker", accounts["attacker"])]:
         print(f"  {name:22} {addr}  {ledger.explorer}/accounts/{addr}")
-    print(f"  addresses -> {out.relative_to(ROOT)}   seeds -> {env.relative_to(ROOT)} (gitignored)")
+    print(f"  addresses -> {out.relative_to(ROOT)}, env/vendors.json   seeds -> {env.relative_to(ROOT)} (gitignored)")
 
 
 if __name__ == "__main__":
