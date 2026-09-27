@@ -287,8 +287,22 @@ def test_ac13_missing_invoice_id_refused(world):
     assert o.status == "refused" and world["service"].budget.committed_drops() == 0
 
 
-def test_budget_released_when_submit_raises(world, monkeypatch):
+def test_budget_released_when_next_sequence_raises(world, monkeypatch):
     service = world["service"]
+
+    def boom(account):
+        raise RuntimeError("next_sequence failed")
+
+    monkeypatch.setattr(service.ledger, "next_sequence", boom)
+    with pytest.raises(RuntimeError, match="next_sequence failed"):
+        run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
+    assert service.budget.committed_drops() == 0
+    assert "INV-2201" not in service.in_flight
+
+
+def test_budget_held_when_submit_raises(world, monkeypatch):
+    service = world["service"]
+    reserved = int(xrp_to_drops(Decimal("12.40")))
 
     def boom(tx):
         raise RuntimeError("submit failed")
@@ -296,8 +310,9 @@ def test_budget_released_when_submit_raises(world, monkeypatch):
     monkeypatch.setattr(service.ledger, "submit", boom)
     with pytest.raises(RuntimeError, match="submit failed"):
         run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
-    assert service.budget.committed_drops() == 0
+    assert service.budget.committed_drops() == reserved
     assert "INV-2201" not in service.in_flight
+    assert any(r.kind == "note" and "reservation held" in r.record.get("text", "") for r in service.audit.rows)
 
 
 def test_agent_signature_must_use_agent_key(world, monkeypatch):

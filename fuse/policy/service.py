@@ -89,6 +89,7 @@ class PolicyService:
             return self._done(intent, Outcome("refused", intent.public(), rules, failed, message="Refused at reservation time."))
 
         settled = False
+        held = False
         try:
             with self._submit_lock:                      # sequence assignment through submission, one at a time
                 if intent.invoice_id in self.paid_invoices:
@@ -125,13 +126,18 @@ class PolicyService:
                     base = Payment.from_xrpl(built)
                     policy_signed = sign(base, self._wallet, multisign=True)
                     combined = multisign(base, [Payment.from_xrpl(agent_signed), policy_signed]).to_xrpl()
-                    result = self.ledger.submit(combined)
+                    try:
+                        result = self.ledger.submit(combined)
+                    except Exception:
+                        self.audit.note("submit raised; reservation held", {"commitment": commitment})
+                        held = True
+                        raise
                     self.audit.append_result(commitment, result.hash, result.engine_result, public_text(result.message))
 
                     if result.ok:
+                        self.paid_invoices.add(intent.invoice_id)
                         self.budget.settle(reservation)
                         settled = True
-                        self.paid_invoices.add(intent.invoice_id)
                         self.memos_by_tx_hash[result.hash] = commitment
                         self.daemon.settle(intent.nonce)
                         return self._done(intent, Outcome("paid", intent.public(), rules, tx_hash=result.hash, engine_result=result.engine_result,
@@ -142,7 +148,7 @@ class PolicyService:
                 finally:
                     self.in_flight.discard(intent.invoice_id)
         finally:
-            if not settled:
+            if not settled and not held:
                 self.budget.release(reservation)
 
     # ----- admin path (logged, human-only) -----
