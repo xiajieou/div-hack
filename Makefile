@@ -1,4 +1,4 @@
-.PHONY: install test demo-local spike setup-testnet topup kill policy daemon reader blast audit-check
+.PHONY: install test demo-local spike setup-testnet topup kill policy daemon reader blast audit-check dashboard
 
 MODE ?= local
 
@@ -15,3 +15,4 @@ daemon:         ; $(env) env -u POLICY_SEED python -m fuse.signer.api --port 800
 reader:         ; $(env) env -u AGENT_SEED -u POLICY_SEED python -m fuse.reader.reader --inbox inbox/
 blast:          ; python -m fuse.reports.blast_radius --mode $(MODE)
 audit-check:    ; python -m fuse.reports.audit_completeness --mode $(MODE)
+dashboard:      ; python -m dashboard.serve

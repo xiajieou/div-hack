@@ -1,9 +1,12 @@
-# Dashboard (Phase 4, owner: Front)
+# Dashboard
 
-One page over GET /status from the policy service. Build against mock rows first; switch to the live API when Phase 2 lands.
+One page, `index.html`, served by the policy service at `/dashboard`. It holds no keys.
 
-Shows: invoices with their decisions (paid, refused, parked, rejected by ledger), testnet explorer links, the poisoned row's hidden text, the blast radius table (Phase 5), the audit completeness result (Phase 6).
+    make dashboard          # local ledger with the demo invoices and two stolen-key attacks, no network
+    make policy             # the real policy service; open http://localhost:8001/dashboard
 
-Actions: add vendor (POST /admin/vendor, the logged admin path), kill switch (POST /submit-file with break-glass/revoke.json). The dashboard holds no keys.
+It polls `GET /status` (invoices, decisions, audit log, ledger history), `GET /reports` (blast radius and audit
+completeness) and `GET /invoices` (inbox files, to show the poisoned invoice's hidden text). Its two buttons call
+`POST /admin/vendor` and `POST /submit-file`; the kill switch stays disabled until `break-glass/revoke.json` exists.
 
-Stack: whatever the owner is fastest in. A single static page polling the API is enough for the demo; Next.js only if it costs nothing.
+`make dashboard` leaves Northwind Freight parked and prints its address, so the Add vendor form has something to do.

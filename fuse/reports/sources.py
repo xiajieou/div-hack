@@ -5,8 +5,8 @@ Both modes return the same shapes, so the report logic never knows which ledger 
     facts   = {"address", "balance_drops", "regular_key", "master_disabled", "quorum", "signers", "delegations"}
     history = [{"type", "account", "delegate", "destination", "result", "hash", "amount_drops", "amount"}, ...]
 
-The local ledger lives in memory, so local mode builds a fresh one: setup, the three clean invoices through the
-policy service, and optionally the stolen-keys attack (both keys, paying the attacker straight to the ledger).
+The local ledger lives in memory, so local mode builds a fresh one (LocalWorld): setup, invoices through the policy
+service, and optionally the stolen-keys attack (both keys, paying the attacker straight to the ledger).
 """
 from __future__ import annotations
 
@@ -53,38 +53,12 @@ def log_hashes(audit_rows: List[dict]) -> Set[str]:
 
 
 # ----- local -----
-class LocalWorld:
-    def __init__(self, attack: bool) -> None:
-        policy = default_policy()
-        self.ledger = LocalLedger()
-        ring = KeyRing.local(self.ledger, policy)
-        run_setup(self.ledger, ring)
-        # the prototype pays from the account it calls treasury, so that account plays the spend role here,
-        # next to a separate treasury that nothing is delegated from
-        spend, desk = ring.treasury.classic_address, ring.desk.classic_address
-        treasury = Wallet.create().classic_address
-        self.ledger.fund(treasury, 1_000_000_000)
-        self.addresses = {"treasury": treasury, "spend": spend, "desk": desk}
-        self.audit = AuditChain(policy.hash())
-        service = PolicyService(policy, ring.policy, self.ledger, spend, desk, self.audit)
-        daemon = SignerDaemon(ring.agent, spend, desk, {n: v.address for n, v in policy.allowlist.items()},
-                              policy.fee_cap_drops, forward=service.handle_intent)
-        service.attach_daemon(daemon)
-        for name in CLEAN_INVOICES:
-            daemon.register(naive_extract(INVOICES[name])[0])
-        if attack:
-            self._stolen_keys(ring, spend, desk, policy.hash())
+class LedgerSource:
+    """Reads a LocalLedger the way Network reads testnet or devnet."""
 
-    def _stolen_keys(self, ring: KeyRing, spend: str, desk: str, policy_hash: str) -> None:
-        attacker = VendorRecord("attacker", ring.attacker.classic_address, "??")
-        for n in range(1, 4):
-            tx = Payment.from_xrpl(build_payment(
-                treasury=spend, desk=desk, vendor=attacker, amount_xrp=Decimal("100"), invoice_id=f"STOLEN-{n}",
-                commitment="00" * 32, policy_hash=policy_hash, fee_drops=MULTISIGN_FEE_DROPS,
-                sequence=self.ledger.next_sequence(spend), last_ledger_sequence=self.ledger.current_ledger_index() + 40))
-            signed = multisign(tx, [sign(tx, ring.agent, multisign=True), sign(tx, ring.policy, multisign=True)])
-            if not self.ledger.submit(signed.to_xrpl()).ok:
-                break
+    def __init__(self, ledger: LocalLedger) -> None:
+        self.ledger = ledger
+        self.explorer = ""
 
     def facts(self, address: str) -> dict:
         a = self.ledger.account(address)
@@ -96,8 +70,68 @@ class LocalWorld:
         return [_entry(h["type"], h["account"], h["delegate"], h["destination"], h["result"], h["hash"], h["amount"])
                 for h in self.ledger.history if address in (h["account"], h["destination"])]
 
+
+class LocalWorld(LedgerSource):
+    """A fresh local ledger with the full setup, the policy service and the signer daemon wired together."""
+
+    def __init__(self, attack: bool = False, invoices: List[str] = CLEAN_INVOICES) -> None:
+        self.policy = default_policy()
+        super().__init__(LocalLedger())
+        self.ring = ring = KeyRing.local(self.ledger, self.policy)
+        run_setup(self.ledger, ring)
+        # the prototype pays from the account it calls treasury, so that account plays the spend role here,
+        # next to a separate treasury that nothing is delegated from
+        spend, desk = ring.treasury.classic_address, ring.desk.classic_address
+        treasury = Wallet.create().classic_address
+        self.ledger.fund(treasury, 1_000_000_000)
+        self.addresses = {"treasury": treasury, "spend": spend, "desk": desk}
+        self.audit = AuditChain(self.policy.hash())
+        self.service = PolicyService(self.policy, ring.policy, self.ledger, spend, desk, self.audit)
+        self.daemon = SignerDaemon(ring.agent, spend, desk, {name: w.classic_address for name, w in ring.vendors.items()},
+                                   self.policy.fee_cap_drops, forward=self.service.handle_intent)
+        self.service.attach_daemon(self.daemon)
+        for name in invoices:
+            self.process(name)
+        if attack:
+            self.stolen_keys(Decimal("100"), 3)
+
+    def invoice_text(self, name: str) -> str:
+        return INVOICES[name].replace("{ATTACKER}", self.ring.attacker.classic_address)
+
+    def process(self, name: str):
+        nonce = self.daemon.register(naive_extract(self.invoice_text(name))[0])
+        return self.service.outcomes[nonce]
+
+    def _attacker_payment(self, amount_xrp: Decimal, n: int) -> Payment:
+        spend, desk = self.addresses["spend"], self.addresses["desk"]
+        attacker = VendorRecord("attacker", self.ring.attacker.classic_address, "??")
+        return Payment.from_xrpl(build_payment(
+            treasury=spend, desk=desk, vendor=attacker, amount_xrp=amount_xrp, invoice_id=f"STOLEN-{n}",
+            commitment="00" * 32, policy_hash=self.policy.hash(), fee_drops=MULTISIGN_FEE_DROPS,
+            sequence=self.ledger.next_sequence(spend), last_ledger_sequence=self.ledger.current_ledger_index() + 40))
+
+    def agent_key_alone(self, amount_xrp: Decimal):
+        """An attacker holding only the agent key signs a payment to itself and submits it straight to the ledger."""
+        return self.ledger.submit(sign(self._attacker_payment(amount_xrp, 0), self.ring.agent, multisign=True).to_xrpl())
+
+    def stolen_keys(self, amount_xrp: Decimal, count: int) -> None:
+        """An attacker holding both keys pays itself around the policy service until a payment fails."""
+        for n in range(1, count + 1):
+            tx = self._attacker_payment(amount_xrp, n)
+            signed = multisign(tx, [sign(tx, self.ring.agent, multisign=True), sign(tx, self.ring.policy, multisign=True)])
+            if not self.ledger.submit(signed.to_xrpl()).ok:
+                break
+
     def log_hashes(self) -> Set[str]:
         return log_hashes(self.audit.dump())
+
+
+def source_for(ledger):
+    """The report source for the ledger a running policy service uses."""
+    if isinstance(ledger, LocalLedger):
+        return LedgerSource(ledger)
+    from ..ledger.testnet import DEVNET_RPC
+    return Network("devnet" if ledger.rpc_url == DEVNET_RPC else "testnet")
 
 
 # ----- testnet / devnet -----

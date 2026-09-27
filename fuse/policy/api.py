@@ -26,6 +26,7 @@ from ..audit import AuditChain
 from ..config import default_policy
 from ..ledger.local import LocalLedger
 from ..ledger.testnet import TestnetLedger
+from ..reports.api import add_routes
 from ..setup import KeyRing, run_setup
 from ..signer.daemon import Refusal, SignerDaemon
 
@@ -139,4 +140,6 @@ def _service_from_env() -> PolicyService:
         service.attach_daemon(DaemonClient(daemon_url, os.environ["AGENT_ADDRESS"]))
     return service
 
-app = create_app(_service_from_env())
+service = _service_from_env()
+app = create_app(service)
+add_routes(app, service)

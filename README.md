@@ -55,6 +55,7 @@ On Windows, set `PYTHONIOENCODING=utf-8` first (PowerShell: `$env:PYTHONIOENCODI
 | `python -m fuse.demo --mode devnet` | Same demo on XRPL devnet with fresh faucet accounts; takes a few minutes |
 | `make blast` | Blast radius report: worst case per stolen key, plus any setup mistake that would make it worse |
 | `make audit-check` | Audit completeness: payments on the ledger that the audit log never saw |
+| `make dashboard` | Dashboard on the local ledger at http://localhost:8001/dashboard: invoices, decisions, ledger activity, both reports |
 
 The two reports accept `MODE=devnet` to read real accounts from `env/accounts.json`.
 
@@ -75,7 +76,7 @@ Fuse runs on **XRPL devnet, in XRP**. Permission Delegation, which the desk depe
 | Pre-signed break-glass file (kill switch that needs no key) | In progress; the demo currently revokes with the account key |
 | One-command devnet setup | In progress |
 | Reader as its own process watching `inbox/` | In progress |
-| Dashboard | In progress |
+| Dashboard | Working on the local ledger; kill switch button waits for the break-glass file |
 | Vendor credentials from an on-ledger registry | Planned, optional |
 
 ## Team
