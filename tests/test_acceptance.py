@@ -14,7 +14,7 @@ from fuse.ledger.local import LocalLedger
 from fuse.policy.builder import build_payment, decode_memo_commitment, invoice_id_hash
 from fuse.policy.rules import Intent, evaluate
 from fuse.policy.service import MULTISIGN_FEE_DROPS, PolicyService
-from fuse.registry import setup_local_registry
+from fuse.registry import accept, issue, setup_local_registry
 from fuse.setup import KeyRing, revoke_delegation, run_setup
 from fuse.signer.daemon import Refusal, SignerDaemon
 from fastapi.testclient import TestClient
@@ -167,11 +167,13 @@ def test_policy_vendor_swap_refused_by_daemon(world):
     world["daemon"].add_vendor("Northwind Freight", world["ring"].northwind.classic_address)
     o = run_intent(world, vendor="Northwind Freight", amount="6.40", invoice_id="INV-5510")
     assert o.status == "parked"
+    # worst case for the policy side: the registry is compromised too, so the attacker holds an accepted credential
+    attacker = world["ring"].attacker
+    assert issue(world["ledger"], world["registry"], attacker.classic_address).ok
+    assert accept(world["ledger"], attacker, world["registry"].classic_address).ok
     before = len(world["ledger"].history)
-    attacker_before = world["ledger"].balance_xrp(world["ring"].attacker.classic_address)
-    reruns = world["service"].admin_add_vendor(
-        "Northwind Freight", world["ring"].attacker.classic_address, "US"
-    )
+    attacker_before = world["ledger"].balance_xrp(attacker.classic_address)
+    reruns = world["service"].admin_add_vendor("Northwind Freight", attacker.classic_address, "US")
     assert len(reruns) == 1 and reruns[0].status == "refused"
     assert any("Destination does not match my record" in f for f in reruns[0].failed)
     assert len(world["ledger"].history) == before
