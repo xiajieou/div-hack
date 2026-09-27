@@ -18,8 +18,10 @@ import json
 import os
 import queue
 import re
+import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -42,7 +44,7 @@ from fuse.breakglass import sign_break_glass
 from fuse.config import default_policy, drops_to_xrp
 from fuse.ledger.testnet import TestnetLedger
 from fuse.policy.builder import invoice_id_hash
-from fuse.policy.service import PolicyService
+from fuse.policy.service import AdminError, PolicyService
 from fuse.setup import _single_sign
 from fuse.policy.rules import Intent
 from fuse.reader.reader import PROMPT, hidden_text, naive_extract
@@ -162,10 +164,27 @@ class NetworkWorld(LocalWorld):
         # the audit log starts with this process, so only payments made from now on are expected to be in it
         self.before = {t["hash"] for t in self.net.history(accounts["spend"])}
         # the service keeps paid invoices in memory; read them back from the ledger so a restart cannot pay twice
-        self.service.paid_invoices |= self._paid_on_ledger(accounts["spend"])
+        self.paid_before = self._paid_on_ledger(accounts["spend"])
+        self.service.paid_invoices |= self.paid_before
+        self.fresh: Dict[str, str] = {}
+
+    def invoice_text(self, name: str) -> str:
+        """A real ledger takes each invoice once, so a scene that paid one in an earlier run could not run again.
+        An invoice already paid before this session gets the vendor's next number, with the same purchase order."""
+        text = super().invoice_text(name)
+        old = re.search(r"INV-\d+", text).group(0)
+        if old not in self.fresh:
+            new, n = old, 0
+            while new in self.paid_before:
+                n += 1
+                new = f"{old}{n}"
+            self.policy.open_purchase_orders[new] = self.policy.open_purchase_orders[old]
+            self.fresh[old] = new
+        return text.replace(old, self.fresh[old])
 
     def _paid_on_ledger(self, spend: str) -> set:
-        by_hash = {invoice_id_hash(i): i for i in self.policy.open_purchase_orders}
+        ids = [f"{i}{n}" if n else i for i in self.policy.open_purchase_orders for n in range(100)]
+        by_hash = {invoice_id_hash(i): i for i in ids}
         paid, marker = set(), None
         while True:
             r = self.ledger.client.request(AccountTx(account=spend, marker=marker)).result
@@ -248,7 +267,9 @@ class Flow:
             armed = self.world.rearm()
             note = (f"The desk's Payment permission was restored: {r.engine_result}." if r
                     else "The desk still holds its Payment permission.") + (f" {armed[:1].upper()}{armed[1:]}." if armed else "") + \
-                " Accounts and history stay as they are."
+                " Same accounts; invoices already paid get new numbers and Northwind is unapproved again."
+            # a fresh session on the same accounts, as Reset is locally: new audit log, paid invoices read back
+            self.world = NetworkWorld()
         w = self.world
         # the human's half of approving Northwind, on the daemon's own list, done at setup
         w.daemon.add_vendor("Northwind Freight", w.ring.northwind.classic_address)
@@ -501,8 +522,11 @@ class Flow:
         return {"kind": "stop", "title": f"Stopped by {who}", "by": by,
                 "text": "Nothing was signed. " + "; ".join(outcome.failed)}
 
+    def _inv(self, name: str) -> str:
+        return re.search(r"INV-\d+", self.world.invoice_text(name)).group(0)
+
     def s_normal(self):
-        todo = [n for n in CLEAN_INVOICES if f"INV-{n.split('_')[1]}" not in self.world.service.paid_invoices]
+        todo = [n for n in CLEAN_INVOICES if self._inv(n) not in self.world.service.paid_invoices]
         if not todo:
             return {"kind": "info", "title": "All three clean invoices are paid", "text": "Press Reset to start over."}
         return self.verdict_for(self.invoice(todo[0]))
@@ -524,10 +548,14 @@ class Flow:
         return v
 
     def s_unknown(self):
+        if self._inv("inv_5510_northwind.txt") in self.world.service.paid_invoices:
+            return {"kind": "info", "title": "Northwind's invoice is already paid",
+                    "text": "It was approved and paid in this session. Press Reset to start over."}
         return self.verdict_for(self.invoice("inv_5510_northwind.txt"))
 
     def _admin_adds_northwind(self, address: str, actor: str):
-        if "INV-5510" in self.world.service.paid_invoices:
+        honest = address == self.world.ring.northwind.classic_address
+        if honest and self._inv("inv_5510_northwind.txt") in self.world.service.paid_invoices:
             return {"kind": "info", "title": "Northwind is already approved and paid", "text": "Press Reset to try this again."}
         parked = any(i.vendor == "Northwind Freight" for i in self.world.service.parked.values())
         if not parked and "Northwind Freight" not in self.world.policy.allowlist:
@@ -541,7 +569,16 @@ class Flow:
         self.state("policy", "active")
         self.log("policy", "vendor list changed, so the policy hash changed; rerunning the parked request")
         self.actor = "policy"
-        reruns = self.world.service.admin_add_vendor("Northwind Freight", address, "US", actor=actor)
+        try:
+            reruns = self.world.service.admin_add_vendor("Northwind Freight", address, "US", actor=actor)
+        except AdminError as e:
+            self.log("policy", f"admin change refused: {e}", "bad")
+            self.state("policy", "stop")
+            if not honest:
+                return {"kind": "stop", "by": "policy", "title": "Stopped by the policy service",
+                        "text": "Northwind is already on the list, and adding a vendor never replaces a record: an insider cannot swap its address."}
+            # already approved earlier in this session, its payment not made yet: file the invoice again
+            return self.verdict_for(self.invoice("inv_5510_northwind.txt"))
         return self.verdict_for(reruns[0] if reruns else self.invoice("inv_5510_northwind.txt"))
 
     def s_approve(self):
@@ -605,13 +642,11 @@ class Flow:
         return {"kind": "stop", "title": "Stopped by the ledger", "by": "desk",
                 "text": f"{r.engine_result}: the desk may send Payments and nothing else."}
 
+    TOP_UP_XRP = "30"
+
     def s_top_up(self):
         if self.network != "local":
-            self.state("admin", "active")
-            self.log("admin", "the treasury key stays with a person: run make topup in a terminal")
-            return {"kind": "info", "title": "A person tops up",
-                    "text": "Run make topup in a terminal: it signs with the treasury key, which this page never holds. "
-                            "The paying account's balance here updates when it lands."}
+            return self._top_up_by_script()
         self.actor = "human"
         self.state("admin", "active")
         self.log("admin", "signs 100 XRP from the treasury to the paying account with the treasury key")
@@ -619,6 +654,40 @@ class Flow:
         self.state("admin", "ok")
         return {"kind": "paid" if r.ok else "stop", "title": "Refilled by a human" if r.ok else "Top-up failed",
                 "text": f"{r.engine_result}. No program holds the treasury key."}
+
+    def _top_up_by_script(self):
+        """The person's own script signs with the treasury key in a separate process; this server never loads it."""
+        self.state("admin", "active")
+        self.log("admin", f"runs scripts/topup.py: {self.TOP_UP_XRP} XRP from the treasury to the paying account")
+        self.log("admin", "the script reads the treasury key itself; this server never loads it")
+        self.edge("admin", "treasury", "signs the top-up")
+        self.state("treasury", "active")
+        env = {k: v for k, v in os.environ.items() if not k.endswith("_SEED")}
+        try:
+            done = subprocess.run([sys.executable, str(ROOT / "scripts" / "topup.py"), self.TOP_UP_XRP], cwd=ROOT, env=env,
+                                  capture_output=True, text=True, encoding="utf-8", timeout=120)
+            out = (done.stdout + done.stderr).strip()
+        except subprocess.TimeoutExpired:
+            out = "timed out waiting for the ledger"
+        m = re.search(r"\b(te[a-z][A-Z_]+)\b", out)
+        code = m.group(1) if m else "no result"
+        link = re.search(r"https://\S+/transactions/[0-9A-F]{64}", out)
+        self.state("admin", "ok")
+        meaning = "the treasury does not have the money" if code == "tecUNFUNDED_PAYMENT" else MEANING.get(code, out.splitlines()[-1] if out else "")
+        self.log("treasury", f"{code}: {meaning}", "good" if code == "tesSUCCESS" else "bad")
+        if link:
+            self.log("treasury", link.group(0))
+        if code != "tesSUCCESS":
+            self.state("treasury", "stop")
+            return {"kind": "stop", "title": "Top-up failed", "by": "treasury", "text": f"{code}: {meaning}."}
+        self.state("treasury", "ok")
+        self.edge("treasury", "spend", f"{self.TOP_UP_XRP} XRP", "money")
+        self.state("spend", "ok")
+        self.log("spend", f"received {self.TOP_UP_XRP} XRP from the treasury", "good")
+        self.emit({"type": "reports"})
+        return {"kind": "paid", "title": "Refilled by a human",
+                "text": f"{self.TOP_UP_XRP} XRP from the treasury, signed by the person's own script. "
+                        "No service holds the treasury key.", "link": link.group(0) if link else ""}
 
     def s_kill(self):
         self.actor = "human"
@@ -679,7 +748,7 @@ class Flow:
         return True
 
     NETWORK_BLURBS = {
-        "top_up": "A person refills the paying account with make topup; this page never holds the treasury key.",
+        "top_up": "A person refills the paying account from the treasury; their own script signs, this page never holds the key.",
         "kill": "Submit the pre-signed break-glass file (no key), then try a fully signed payment. Reset re-arms it.",
     }
 
@@ -689,16 +758,21 @@ class Flow:
 
     def snapshot(self) -> dict:
         w = self.world
-        rep = build_reports(w.service, w.addresses, w)
-        bal = lambda a: str(drops_to_xrp(w.balance_drops(a)))
+        vendors = [x.classic_address for x in [*w.ring.vendors.values(), w.ring.northwind]]
+        wanted = [w.addresses["spend"], w.addresses["treasury"], w.addresses["desk"], w.ring.attacker.classic_address, *vendors]
+        # on devnet every read is a round trip; do them side by side rather than one after another
+        with ThreadPoolExecutor(max_workers=len(wanted) + 1) as pool:
+            report = pool.submit(build_reports, w.service, w.addresses, w)
+            drops = dict(zip(wanted, pool.map(w.balance_drops, wanted)))
+            rep = report.result()
+        bal = lambda a: str(drops_to_xrp(drops[a]))
         spend = rep["blast"]["accounts"]["spend"] if "blast" in rep else {"delegations": {}}
         blurbs = self.NETWORK_BLURBS if self.network != "local" else {}
         return {**rep, "network": self.network, "running": self.running, "policy_hash": w.policy.hash(),
                 "balances": {"spend": bal(w.addresses["spend"]), "treasury": bal(w.addresses["treasury"]),
                              "desk": bal(w.addresses["desk"]),
-                             "vendors": str(drops_to_xrp(self._vendor_drops() - self.baseline["vendors"])),
-                             "attacker_acct": str(drops_to_xrp(w.balance_drops(w.ring.attacker.classic_address)
-                                                               - self.baseline["attacker_acct"]))},
+                             "vendors": str(drops_to_xrp(sum(drops[v] for v in vendors) - self.baseline["vendors"])),
+                             "attacker_acct": str(drops_to_xrp(drops[w.ring.attacker.classic_address] - self.baseline["attacker_acct"]))},
                 "delegation": ", ".join(spend["delegations"].get(w.addresses["desk"], [])),
                 "reader": {"model": READER_MODEL, "available": bool(self.model_key)},
                 "scenarios": [{"id": k, "title": t, "blurb": blurbs.get(k, b)} for k, (t, b, _) in self.SCENARIOS.items()]}

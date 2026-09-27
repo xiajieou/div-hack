@@ -87,12 +87,12 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
 .caption{border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:12px 14px;margin-bottom:12px;min-height:66px;transition:background .25s,border-color .25s}
 .caption .t{font-weight:600;font-size:16px}
 .caption .d{color:var(--muted);font-size:14px;margin-top:2px}
-.caption.paid{background:var(--pass-soft);border-color:var(--pass)}
-.caption.stop{background:var(--trip-soft);border-color:var(--trip)}
-.caption.park{background:var(--wait-soft);border-color:var(--wait)}
-.caption.capped{background:var(--accent-soft);border-color:var(--accent)}
-.caption.paid .t{color:var(--pass)} .caption.stop .t{color:var(--trip)} .caption.park .t{color:var(--wait)} .caption.capped .t{color:var(--accent-ink)}
-.caption.run .t::after{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-left:8px;vertical-align:middle;animation:blink 1s infinite}
+.caption.v-paid{background:var(--pass-soft);border-color:var(--pass)}
+.caption.v-stop{background:var(--trip-soft);border-color:var(--trip)}
+.caption.v-park{background:var(--wait-soft);border-color:var(--wait)}
+.caption.v-capped{background:var(--accent-soft);border-color:var(--accent)}
+.caption.v-paid .t{color:var(--pass)} .caption.v-stop .t{color:var(--trip)} .caption.v-park .t{color:var(--wait)} .caption.v-capped .t{color:var(--accent-ink)}
+.caption.v-run .t::after{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-left:8px;vertical-align:middle;animation:blink 1s infinite}
 @keyframes blink{50%{opacity:.2}}
 
 /* diagram */
@@ -406,10 +406,11 @@ function fireEdge(a, b, label, kind) {
 }
 
 // ----- popover -----
-function showPop(k) {
-  shown = k;
-  renderPop();
-  const pop = $("pop"), r = $("n-" + k).getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+function placePop() {
+  if (!shown) return;
+  const pop = $("pop"), r = $("n-" + shown).getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+  // a box scrolled out of view takes its popup with it instead of leaving it over unrelated parts of the page
+  if (r.bottom < 0 || r.top > innerHeight) { pop.classList.remove("open"); return; }
   let x = r.right + 14;
   if (x + w > innerWidth - 12) x = r.left - w - 14;
   if (x < 12) x = Math.max(12, Math.min(innerWidth - w - 12, r.left));
@@ -417,6 +418,17 @@ function showPop(k) {
   pop.style.left = x + "px"; pop.style.top = y + "px";
   pop.classList.add("open");
 }
+function showPop(k) {
+  shown = k;
+  renderPop();
+  placePop();
+}
+function follow(k) {
+  // follow along: bring the working box into view, then open it; the scroll handler keeps the popup attached
+  $("n-" + k).scrollIntoView({ block: "nearest", behavior: "smooth" });
+  showPop(k);
+}
+addEventListener("scroll", placePop, { passive: true });
 function hidePop() { $("pop").classList.remove("open"); shown = null; pinned = null; }
 function renderPop() {
   if (!shown) return;
@@ -473,7 +485,7 @@ function handle(e) {
     running = null; markRunning();
     for (const k in model) if (model[k].state === "active") { model[k].state = "idle"; paintNode(k); }
     setCaption(e.kind, e.title, e.text, e.link);
-    if (e.by && model[e.by]) { model[e.by].here = true; paintNode(e.by); if ($("follow").checked && !pinned) showPop(e.by); }
+    if (e.by && model[e.by]) { model[e.by].here = true; paintNode(e.by); if ($("follow").checked && !pinned) follow(e.by); }
     refresh(); return;
   }
   if (e.type === "reports") { refresh(); return; }
@@ -483,7 +495,7 @@ function handle(e) {
   touch(e.box);
   if (e.type === "state") {
     m.state = e.state; paintNode(e.box);
-    if ($("follow").checked && !pinned && e.state !== "idle" && running) showPop(e.box);
+    if ($("follow").checked && !pinned && e.state !== "idle" && running) follow(e.box);
   }
   if (e.type === "log") m.logs.push({ text: e.text, level: e.level || "" });
   if (e.type === "checks") m.checks = e.items;
@@ -493,7 +505,7 @@ function linkify(text) {
   return esc(text).replace(/https:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
 }
 function setCaption(kind, title, text, link) {
-  const c = $("caption"); c.className = "caption " + (kind || "");
+  const c = $("caption"); c.className = "caption" + (kind ? " v-" + kind : "");
   c.innerHTML = `<div class="t">${esc(title)}</div><div class="d">${linkify(text)}${link ? ` <a href="${esc(link)}" target="_blank" rel="noopener">See it on the devnet explorer</a>` : ""}</div>`;
 }
 function connect() {
@@ -540,8 +552,14 @@ $("reset").addEventListener("click", async () => { hidePop(); await fetch("/flow
 const xrp = (v) => Number(v).toLocaleString("en-US", { maximumFractionDigits: 6 }) + " XRP";
 let lastBlast = "", lastAudit = "";
 function flash(id) { const p = $(id); p.classList.remove("changed"); void p.offsetWidth; p.classList.add("changed"); }
+let asked = 0, shownAsk = 0;
 async function refresh() {
-  try { snap = await (await fetch("/flow/state", { cache: "no-store" })).json(); } catch { return; }
+  // devnet reads take seconds; an older answer arriving late must not overwrite a newer one
+  const ask = ++asked;
+  let fresh;
+  try { fresh = await (await fetch("/flow/state", { cache: "no-store" })).json(); } catch { return; }
+  if (ask < shownAsk) return;
+  shownAsk = ask; snap = fresh;
   if (!document.querySelector(".scen")) renderControls(snap.scenarios);
   $("policy-chip").textContent = "policy " + snap.policy_hash.slice(0, 10);
   if (snap.reader) {
