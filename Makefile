@@ -9,8 +9,9 @@ spike:          ; python scripts/spike/run.py
 setup-testnet:  ; python scripts/setup_testnet.py
 topup:          ; python scripts/topup.py
 kill:           ; python scripts/kill_switch.py
-policy:         ; uvicorn fuse.policy.api:app --port 8001
-daemon:         ; python -m fuse.signer.api --port 8002
-reader:         ; python -m fuse.reader.reader --inbox inbox/
+env = set -a; [ -f .env ] && . ./.env; set +a;
+policy:         ; $(env) uvicorn fuse.policy.api:app --port 8001
+daemon:         ; $(env) python -m fuse.signer.api --port 8002
+reader:         ; $(env) python -m fuse.reader.reader --inbox inbox/
 blast:          ; python -m fuse.reports.blast_radius --mode $(MODE)
 audit-check:    ; python -m fuse.reports.audit_completeness --mode $(MODE)
