@@ -679,7 +679,6 @@ class Flow:
         return True
 
     NETWORK_BLURBS = {
-        "approve": "A human approves Northwind Freight. On devnet it holds no registry credential, so the rules still refuse it.",
         "top_up": "A person refills the paying account with make topup; this page never holds the treasury key.",
         "kill": "Submit the pre-signed break-glass file (no key), then try a fully signed payment. Reset re-arms it.",
     }

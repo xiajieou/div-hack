@@ -1,7 +1,8 @@
 """Vendor credentials on the network the setup script created. Owner: whoever finishes first.
 
-The registry issues a "verified-vendor" credential to each listed vendor (CredentialCreate) and each vendor accepts
-it (CredentialAccept). The attacker gets none. Addresses come from env/accounts.json; the registry and vendor seeds
+The registry issues a "verified-vendor" credential to each listed vendor and to Northwind Freight (CredentialCreate),
+and each accepts it (CredentialAccept). Northwind is verified but not on the company's list: a human still has to
+approve it before it can be paid. The attacker gets none. Addresses come from env/accounts.json; the registry and vendor seeds
 come from the environment (`make credentials` loads .env). Every result code is printed; tecDUPLICATE means the step
 was already done, so the script can be re-run.
 
@@ -37,10 +38,12 @@ def main() -> int:
         sys.exit("REGISTRY_SEED does not match env/accounts.json; re-run setup or reload .env")
     print(f"network: {accounts['network']}   registry {registry.classic_address}")
     failed = []
-    for name, address in accounts["vendors"].items():
-        seed = os.environ.get(seed_name(name))
+    vendors = {**accounts["vendors"], "Northwind Freight": accounts["northwind"]}
+    seeds = {name: seed_name(name) for name in accounts["vendors"]} | {"Northwind Freight": "NORTHWIND_SEED"}
+    for name, address in vendors.items():
+        seed = os.environ.get(seeds[name])
         if not seed:
-            print(f"  {name:22} skipped: {seed_name(name)} is not set")
+            print(f"  {name:22} skipped: {seeds[name]} is not set")
             failed.append(name)
             continue
         created = issue(ledger, registry, address)

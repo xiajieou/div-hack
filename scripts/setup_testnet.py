@@ -210,6 +210,8 @@ def main():
         "TREASURY_SEED": w["treasury"].seed, "SPEND_SEED": w["spend"].seed, "AGENT_SEED": w["agent"].seed,
         "POLICY_SEED": w["policy"].seed, "REGISTRY_SEED": w["registry"].seed,
         **{env_name(name): wallet.seed for name, wallet in vendors.items()},
+        # a verified vendor the company has not listed yet; it needs its key to accept a registry credential
+        "NORTHWIND_SEED": extra["northwind"].seed,
     })
 
     for name in ("treasury", "spend", "desk", "registry"):
