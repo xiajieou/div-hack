@@ -23,8 +23,10 @@ from .rules import Evaluation, Intent, evaluate
 
 MULTISIGN_FEE_DROPS = 36        # base fee x (1 + 2 signers), rounded up
 LAST_LEDGER_WINDOW = 40
-# ed25519 seeds start with sEd; the private key is 66 hex chars starting with ED
-_SECRET = re.compile(r"sEd[1-9A-HJ-NP-Za-km-z]{28}|ED[0-9A-Fa-f]{64}")
+# any XRPL seed (ed25519 sEd..., secp256k1 s...); ED-prefixed and 00-prefixed private keys
+_SECRET = re.compile(
+    r"sEd[1-9A-HJ-NP-Za-km-z]{28}|s[1-9A-HJ-NP-Za-km-z]{28,29}|ED[0-9A-Fa-f]{64}|00[0-9A-Fa-f]{64}"
+)
 
 
 def public_text(text: str) -> str:
