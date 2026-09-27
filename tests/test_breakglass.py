@@ -1,8 +1,9 @@
+import pytest
 from xrpl.core.binarycodec import encode_for_signing
 from xrpl.core.keypairs import derive_classic_address, is_valid_message
 from xrpl.wallet import Wallet
 
-from fuse.breakglass import build_break_glass, sign_break_glass
+from fuse.breakglass import build_break_glass, check_break_glass, sign_break_glass
 
 
 def test_unsigned_shape():
@@ -31,3 +32,28 @@ def test_tampering_breaks_the_signature():
     signed["Authorize"] = Wallet.create().classic_address
     payload = encode_for_signing({k: v for k, v in signed.items() if k != "TxnSignature"})
     assert not is_valid_message(bytes.fromhex(payload), bytes.fromhex(signed["TxnSignature"]), signed["SigningPubKey"])
+
+
+def test_check_accepts_this_setups_signed_revoke():
+    spend, desk = Wallet.create(), Wallet.create()
+    signed = sign_break_glass(spend, desk.classic_address, ticket_sequence=7)
+    assert check_break_glass(signed, spend.classic_address, desk.classic_address) == []
+
+
+@pytest.mark.parametrize("change, reason", [
+    ({"TransactionType": "Payment"}, "not a DelegateSet"),
+    ({"Permissions": [{"Permission": {"PermissionValue": "Payment"}}]}, "Permissions must be empty"),
+    ({"LastLedgerSequence": 100}, "expire"),
+    ({"TxnSignature": ""}, "not signed"),
+])
+def test_check_refuses_anything_but_a_revoke(change, reason):
+    spend, desk = Wallet.create(), Wallet.create()
+    tx = {**sign_break_glass(spend, desk.classic_address, ticket_sequence=7), **change}
+    assert any(reason in p for p in check_break_glass(tx, spend.classic_address, desk.classic_address))
+
+
+def test_check_refuses_a_file_from_another_setup():
+    spend, desk = Wallet.create(), Wallet.create()
+    stale = sign_break_glass(spend, desk.classic_address, ticket_sequence=7)
+    problems = check_break_glass(stale, Wallet.create().classic_address, Wallet.create().classic_address)
+    assert any("spend account" in p for p in problems) and any("desk" in p for p in problems)

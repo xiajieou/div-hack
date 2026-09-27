@@ -30,3 +30,22 @@ def build_break_glass(spend_address: str, desk_address: str, ticket_sequence: in
 def sign_break_glass(spend_wallet: Wallet, desk_address: str, ticket_sequence: int, fee_drops: int = 1000) -> dict:
     unsigned = build_break_glass(spend_wallet.classic_address, desk_address, ticket_sequence, fee_drops)
     return sign(DelegateSet.from_xrpl(unsigned), spend_wallet).to_xrpl()
+
+
+def check_break_glass(tx: dict, spend_address: str, desk_address: str) -> list[str]:
+    """Reasons a file must not be submitted as this setup's kill switch; empty when it may be. Needs no key (the
+    ledger still checks the signature): it stops a different pre-signed transaction or a stale file going out."""
+    problems = []
+    if tx.get("TransactionType") != "DelegateSet":
+        problems.append(f"not a DelegateSet: {tx.get('TransactionType')}")
+    if tx.get("Permissions") != []:
+        problems.append(f"Permissions must be empty, got {tx.get('Permissions')}")
+    if tx.get("Account") != spend_address:
+        problems.append(f"Account {tx.get('Account')} is not this setup's spend account {spend_address}")
+    if tx.get("Authorize") != desk_address:
+        problems.append(f"Authorize {tx.get('Authorize')} is not this setup's desk {desk_address}")
+    if "LastLedgerSequence" in tx:
+        problems.append("carries LastLedgerSequence, so it would expire")
+    if not tx.get("TxnSignature"):
+        problems.append("not signed")
+    return problems
