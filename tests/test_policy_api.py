@@ -2,6 +2,7 @@ import dataclasses
 import json
 
 from fastapi.testclient import TestClient
+from xrpl.core.addresscodec import is_valid_classic_address
 from xrpl.models.transactions import DelegateSet
 
 from fuse.policy.api import DaemonClient, _service_from_env, create_app
@@ -112,6 +113,7 @@ def test_local_mode_with_daemon_url_publishes_facts_and_no_seed(tmp_path, monkey
     vendors = json.loads((tmp_path / "env" / "vendors.json").read_text())
     assert accounts["treasury"] == service.treasury and accounts["desk"] == service.desk
     assert vendors == {name: v.address for name, v in service.policy.allowlist.items()}
-    for text in ((tmp_path / "env" / "accounts.json").read_text(), (tmp_path / "env" / "vendors.json").read_text()):
-        assert service._wallet.seed not in text
-        assert service._wallet.private_key not in text
+    # public facts only: a fixed key set, and every value is a classic address, never a seed or key
+    assert set(accounts) == {"network", "treasury", "desk", "policy", "attacker", "northwind"}
+    for value in [v for k, v in accounts.items() if k != "network"] + list(vendors.values()):
+        assert is_valid_classic_address(value)
