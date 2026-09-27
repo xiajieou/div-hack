@@ -93,7 +93,7 @@ class PolicyService:
         try:
             with self._submit_lock:                      # sequence assignment through submission, one at a time
                 if intent.invoice_id in self.paid_invoices:
-                    failed = ["duplicate invoice"]
+                    failed = ["invoice matches an open purchase order and is unpaid: already paid or in flight"]
                     self.audit.refused(intent.public(), failed)
                     return self._done(intent, Outcome("refused", intent.public(), rules, failed,
                                                       message="No signature exists; nothing to submit."))
