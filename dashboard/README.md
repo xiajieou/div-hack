@@ -6,8 +6,8 @@
     make flow MODE=devnet   # the accounts scripts/setup_testnet.py created, real transactions
 
 On devnet the flow server reads env/accounts.json and the agent, policy and spend keys from .env, never the treasury
-key: Top up tells the presenter to run `make topup`. Reset restores the desk's Payment permission after the kill
-switch; accounts and history stay. Audit completeness counts payments since the server started, and the invoices
+key: Top up tells the presenter to run `make topup`. The kill switch submits break-glass/revoke.json with no key;
+Reset restores the desk's Payment permission and re-arms the file on a new Ticket. Accounts and history stay. Audit completeness counts payments since the server started, and the invoices
 already paid on the ledger are read back at startup so a restart cannot pay one twice.
 
 The system drawn as boxes, top to bottom. Pick a scenario and it runs through the real policy service, signer daemon

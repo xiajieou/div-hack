@@ -53,7 +53,7 @@ On Windows, set `PYTHONIOENCODING=utf-8` first (PowerShell: `$env:PYTHONIOENCODI
 | `python -m fuse.demo --mode devnet` | Same demo on XRPL devnet with fresh faucet accounts; takes a few minutes |
 | `make blast` | Blast radius report: worst case per stolen key, plus any setup mistake that would make it worse |
 | `make audit-check` | Audit completeness: payments on the ledger that the audit log never saw |
-| `make flow` | Interactive view at http://localhost:8001/: run any scenario and watch each part pass, stop or get fooled (`MODE=devnet` for real transactions) |
+| `make flow` | Interactive view at http://localhost:8001/: run any scenario and watch each part pass, stop or get fooled (`MODE=devnet` for real transactions; with `GEMINI_API_KEY` set, a Real AI reader switch lets a real model read each invoice) |
 | `make dashboard` | Dashboard on the local ledger at http://localhost:8001/dashboard: invoices, decisions, ledger activity, both reports |
 
 ### On XRPL devnet
@@ -63,6 +63,7 @@ python scripts/setup_testnet.py     # accounts, 30 XRP float, delegation, 2-of-2
 make credentials                    # the registry issues "verified vendor" credentials; each vendor accepts
 make flow MODE=devnet               # the interactive view, now submitting real transactions
 make topup                          # a person refills the spend account from the treasury
+make kill                           # submit the pre-signed break-glass file; no key needed
 ```
 
 `make blast MODE=devnet` and `make audit-check MODE=devnet` read the same accounts. Keys stay in `.env` (gitignored); the treasury key is only ever used by `make topup`.
@@ -81,10 +82,10 @@ Fuse runs on **XRPL devnet, in XRP**. Permission Delegation, which the desk depe
 | Hash-chained audit log | Working |
 | Blast radius and audit completeness reports | Working |
 | Separate spend account, refilled by hand from a treasury | Working on devnet (`make topup`) |
-| Pre-signed break-glass file (kill switch that needs no key) | In progress; the demo currently revokes with the account key |
+| Pre-signed break-glass file (kill switch that needs no key) | Working on devnet: setup arms it, `make kill` or the flow view submits it; the local ledger has no tickets, so local mode revokes with the account key |
 | One-command devnet setup | Working |
 | Reader as its own process watching `inbox/` | Working (`make reader`). Deterministic extractor by default; with `OPENROUTER_API_KEY` set it asks a real model and falls back to the deterministic one if the call fails |
-| Dashboard | Working on the local ledger; kill switch button waits for the break-glass file |
+| Dashboard | Working; its kill switch button submits the break-glass file once setup has written it |
 | Vendor credentials from an on-ledger registry | Working, local and devnet (`make credentials`) |
 
 ## Team

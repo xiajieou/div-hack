@@ -10,7 +10,9 @@ from fuse.reports.sources import LocalWorld
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
+    # isolated from a break-glass/revoke.json that a real setup run may have written
+    monkeypatch.setenv("BREAK_GLASS_FILE", str(tmp_path / "revoke.json"))
     world = LocalWorld(invoices=["inv_2201_verdant.txt", "inv_2201_verdant_REISSUE.txt"])
     world.stolen_keys(Decimal("50"), 2)
     write_fixtures(str(tmp_path), world.ring.attacker.classic_address)
@@ -28,6 +30,12 @@ def test_reports_carry_blast_radius_and_flag_the_attackers_payments(client):
     assert loss["agent key"] == 0 and loss["policy key"] == 0
     assert r["audit"]["outgoing"] == 3
     assert [t["amount_drops"] for t in r["audit"]["unlogged"]] == [50_000_000, 50_000_000]
+
+
+def test_reports_say_when_the_break_glass_file_is_armed(client, tmp_path):
+    c, _ = client
+    (tmp_path / "revoke.json").write_text("{}")
+    assert c.get("/reports").json()["break_glass_file"] is True
 
 
 def test_invoices_expose_hidden_text_only_for_the_poisoned_one(client):

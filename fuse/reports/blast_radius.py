@@ -26,8 +26,9 @@ blast_radius() is pure: a snapshot of ledger state in, rows and findings out. Th
 Findings: more than one delegate, a delegate holding anything besides Payment, a regular key on the spend account
 or the desk, a signer list on the spend account, the desk master key enabled, a desk quorum below the total signer
 weight, any delegate on the treasury, or payments coming straight from the treasury. Any finding raises every
-program-held key's row to the float, because the argument no longer holds. With no delegation left (the kill
-switch fired) and no findings, both keys together can move nothing.
+program-held key's row to the float, because the argument no longer holds. Whoever can sign for the desk can also
+spend the desk's own XRP (its fee budget), so that balance is added wherever the desk's keys are enough. With no
+delegation left (the kill switch fired) and no findings, both keys together can move only the desk's own balance.
 """
 from __future__ import annotations
 
@@ -83,15 +84,18 @@ def blast_radius(snapshot: dict) -> Tuple[List[Row], List[Finding]]:
     elif treasury.get("delegations"):
         findings.append(Finding(f"treasury has delegates: {sorted(treasury['delegations'])}"))
 
-    one_key = float_drops if findings else 0
-    both_keys = float_drops if delegations or findings else 0
+    desk_drops = desk.get("balance_drops", 0)
+    one_key = float_drops + desk_drops if findings else 0
+    both_keys = (float_drops if delegations or findings else 0) + desk_drops
     broken = "a setup finding voids the two-key argument; assume the worst"
+    desk_note = f" plus the desk's own {drops_to_xrp(desk_drops)} XRP" if desk_drops else ""
     rows = [
         Row("reader", 0, "files intents only; holds no key"),
         Row("agent key", one_key, broken if findings else "quorum also needs the policy signature"),
         Row("policy key", one_key, broken if findings else "quorum also needs the agent signature; the daemon signs only matching intents"),
-        Row("agent+policy keys", both_keys, "delegation covers Payment only; the ledger caps it at the spend balance" if both_keys
-            else "no delegation on the spend account: the desk can move nothing"),
+        Row("agent+policy keys", both_keys,
+            ("delegation covers Payment only; the ledger caps it at the spend balance" if delegations or findings
+             else "no delegation on the spend account: nothing from it") + desk_note),
         Row("spend account key", float_drops, "controls the spend account and nothing else"),
         Row("treasury key", snapshot["treasury_drops"], "everything; human-only key"),
     ]
