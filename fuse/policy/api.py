@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses # which turns an Outcome dataclass into a plain dict 
 import httpx
 from fastapi import Body, FastAPI 
+from fastapi.responses import JSONResponse
 from .rules import Intent
 from .service import PolicyService
 import json 
@@ -72,7 +73,10 @@ def create_app(service: PolicyService) -> FastAPI:
 
     @app.post("/admin/vendor")
     def admin_vendor(body: dict = Body()):
-        reruns = service.admin_add_vendor(body["name"], body["address"], body["jurisdiction"], body.get("actor", "human"))
+        try:
+            reruns = service.admin_add_vendor(body["name"], body["address"], body["jurisdiction"], body.get("actor", "human"))
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"detail": str(exc)})
         return [dataclasses.asdict(o) for o in reruns]
 
     @app.post("/submit-file")

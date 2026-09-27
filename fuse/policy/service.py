@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Dict, List, Optional, Set
 
+from xrpl.core.addresscodec import is_valid_classic_address
 from xrpl.core.binarycodec import encode_for_multisigning
 from xrpl.core.keypairs import is_valid_message
 from xrpl.models.transactions import Payment
@@ -154,6 +155,10 @@ class PolicyService:
 
     # ----- admin path (logged, human-only) -----
     def admin_add_vendor(self, name: str, address: str, jurisdiction: str, actor: str = "human") -> List[Outcome]:
+        if name in self.policy.allowlist:
+            raise ValueError("vendor already listed; adding a vendor never replaces a record")
+        if not is_valid_classic_address(address):
+            raise ValueError(f"invalid classic address: {address}")
         self.policy.allowlist[name] = VendorRecord(name, address, jurisdiction)
         self.audit.admin("add_vendor", {"actor": actor, "vendor": name, "address": address, "jurisdiction": jurisdiction,
                                          "new_policy_hash": self.policy.hash()})

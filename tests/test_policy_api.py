@@ -56,6 +56,31 @@ def test_admin_add_vendor_reruns_parked(world):
     assert any(row["kind"] == "admin" for row in service.audit.dump())
 
 
+def test_admin_add_vendor_refuses_replace_and_invalid_address(world):
+    service = world["service"]
+    client = TestClient(create_app(service))
+    existing = service.policy.allowlist["Baltic Freight"]
+    before = (existing.address, existing.jurisdiction)
+    replace = client.post("/admin/vendor", json={
+        "name": "Baltic Freight",
+        "address": world["ring"].northwind.classic_address,
+        "jurisdiction": "US",
+        "actor": "cfo@company",
+    })
+    assert replace.status_code == 400
+    assert "never replaces" in replace.json()["detail"]
+    assert (service.policy.allowlist["Baltic Freight"].address,
+            service.policy.allowlist["Baltic Freight"].jurisdiction) == before
+    bad = client.post("/admin/vendor", json={
+        "name": "Brand New Co",
+        "address": "not-an-address",
+        "jurisdiction": "US",
+    })
+    assert bad.status_code == 400
+    assert "invalid classic address" in bad.json()["detail"]
+    assert "Brand New Co" not in service.policy.allowlist
+
+
 def test_submit_file_revokes_then_payment_rejected(world, tmp_path, monkeypatch):
     service = world["service"]
     ring = world["ring"]
