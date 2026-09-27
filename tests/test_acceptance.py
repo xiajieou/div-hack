@@ -300,6 +300,35 @@ def test_budget_released_when_submit_raises(world, monkeypatch):
     assert "INV-2201" not in service.in_flight
 
 
+def test_agent_signature_must_use_agent_key(world, monkeypatch):
+    from xrpl.core.binarycodec import encode_for_multisigning
+    from xrpl.core.keypairs import sign as kp_sign
+    from xrpl.wallet import Wallet as XRPLWallet
+    from fuse.policy.builder import strip_signatures
+    service = world["service"]
+    before = len(world["ledger"].history)
+    impostor = XRPLWallet.create()
+
+    def forged_sign(tx, nonce):
+        # Sign the multisign payload for the daemon's Account with an impostor key,
+        # then label Signer.Account as the daemon (the bug the check closes).
+        payload = encode_for_multisigning(strip_signatures(tx), world["daemon"].address)
+        sig = kp_sign(bytes.fromhex(payload), impostor.private_key)
+        out = dict(tx)
+        out["Signers"] = [{"Signer": {
+            "Account": world["daemon"].address,
+            "SigningPubKey": impostor.public_key,
+            "TxnSignature": sig,
+        }}]
+        return out
+
+    monkeypatch.setattr(service.daemon, "sign", forged_sign)
+    o = run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
+    assert o.status == "refused"
+    assert any("returned transaction is not the one built" in f for f in o.failed)
+    assert len(world["ledger"].history) == before
+
+
 # ---------- AC15: allowlisted vendor in a disallowed jurisdiction is refused ----------
 def test_ac15_jurisdiction_refused(world):
     world["policy"].open_purchase_orders["INV-RU1"] = "PO-999"

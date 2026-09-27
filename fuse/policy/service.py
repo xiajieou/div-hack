@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Set
 
 from xrpl.core.addresscodec import is_valid_classic_address
 from xrpl.core.binarycodec import encode_for_multisigning
-from xrpl.core.keypairs import is_valid_message
+from xrpl.core.keypairs import derive_classic_address, is_valid_message
 from xrpl.models.transactions import Payment
 from xrpl.transaction import multisign, sign
 from xrpl.wallet import Wallet
@@ -178,6 +178,8 @@ class PolicyService:
             return False
         s = signers[0]["Signer"]
         if s["Account"] != self.daemon.address:
+            return False
+        if derive_classic_address(s["SigningPubKey"]) != self.daemon.address:
             return False
         payload = encode_for_multisigning(strip_signatures(agent_signed), s["Account"])
         return is_valid_message(bytes.fromhex(payload), bytes.fromhex(s["TxnSignature"]), s["SigningPubKey"])
