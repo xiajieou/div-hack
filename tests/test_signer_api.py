@@ -121,8 +121,11 @@ def test_vendors_file_reloaded_on_sign(world, tmp_path):
 
 def test_build_daemon_from_env_ignores_accounts_vendors(world, tmp_path, monkeypatch):
     lumen_addr = world["policy"].allowlist["Lumen Legal"].address
+    spend = world["ring"].treasury.classic_address
+    treasury = world["ring"].attacker.classic_address  # different from spend
     accounts = {
-        "treasury": world["ring"].treasury.classic_address,
+        "treasury": treasury,
+        "spend": spend,
         "desk": world["ring"].desk.classic_address,
         "vendors": {"Lumen Legal": world["ring"].attacker.classic_address},
     }
@@ -137,3 +140,5 @@ def test_build_daemon_from_env_ignores_accounts_vendors(world, tmp_path, monkeyp
     daemon = build_daemon_from_env()
     assert daemon.directory == vendors
     assert daemon.address == world["ring"].agent.classic_address
+    assert daemon.treasury == accounts["spend"]
+    assert daemon.treasury != accounts["treasury"]

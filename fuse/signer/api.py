@@ -88,7 +88,7 @@ def build_daemon_from_env() -> SignerDaemon:
 
     return SignerDaemon(
         wallet,
-        accounts["treasury"],
+        accounts["spend"],
         accounts.get("desk"),
         vendors,
         default_policy().fee_cap_drops,
