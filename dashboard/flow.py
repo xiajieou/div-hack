@@ -28,16 +28,17 @@ from typing import Callable, Dict, List, Optional
 
 import httpx
 import uvicorn
-from xrpl.models.requests import AccountInfo, AccountTx
-from xrpl.models.transactions import DelegateSet
+from xrpl.models.requests import AccountInfo, AccountObjects, AccountTx
+from xrpl.models.transactions import DelegateSet, TicketCreate
 from xrpl.models.transactions.delegate_set import Permission
-from xrpl.transaction import multisign, sign
+from xrpl.transaction import autofill_and_sign, multisign, sign
 from xrpl.wallet import Wallet
 from fastapi import Body, FastAPI
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 import fuse.policy.service as policy_service
 from fuse.audit import AuditChain
+from fuse.breakglass import sign_break_glass
 from fuse.config import default_policy, drops_to_xrp
 from fuse.ledger.testnet import TestnetLedger
 from fuse.policy.builder import invoice_id_hash
@@ -51,6 +52,7 @@ from fuse.signer.daemon import Refusal, SignerDaemon
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = Path(__file__).resolve().parent / "flow.html"
+BREAK_GLASS = Path(os.environ.get("BREAK_GLASS_FILE", ROOT / "break-glass" / "revoke.json"))
 STEP = 0.7          # seconds between steps when the throttle is on
 TICK = 0.22         # seconds between checklist items
 
@@ -195,6 +197,26 @@ class NetworkWorld(LocalWorld):
         return self.ledger.submit(_single_sign(tx, self.ring.treasury, self.ledger.next_sequence(spend),
                                                self.ledger.current_ledger_index() + 40))
 
+    def _tickets(self) -> List[int]:
+        r = self.ledger.client.request(AccountObjects(account=self.addresses["spend"], ledger_index="validated", type="ticket")).result
+        return sorted(o["TicketSequence"] for o in r.get("account_objects", []))
+
+    def rearm(self) -> Optional[str]:
+        """The break-glass file is good once: its Ticket is used when it lands. Reserve a new Ticket if none is left
+        and pre-sign a fresh revoke against it, the way setup does. Returns what was done, or None if still armed."""
+        tickets = self._tickets()
+        if BREAK_GLASS.exists() and json.loads(BREAK_GLASS.read_text()).get("TicketSequence") in tickets:
+            return None
+        if not tickets:
+            tx = TicketCreate(account=self.addresses["spend"], ticket_count=1)
+            r = self.ledger.submit(autofill_and_sign(tx, self.ledger.client, self.ring.treasury).to_xrpl())
+            if not r.ok:
+                return f"could not reserve a new ticket: {r.engine_result}"
+            tickets = self._tickets()
+        BREAK_GLASS.parent.mkdir(exist_ok=True)
+        BREAK_GLASS.write_text(json.dumps(sign_break_glass(self.ring.treasury, self.addresses["desk"], tickets[0]), indent=2))
+        return f"break-glass file re-armed on ticket {tickets[0]}"
+
 
 class Flow:
     def __init__(self, network: str = "local") -> None:
@@ -223,8 +245,10 @@ class Flow:
             note = "Connected to the accounts the setup script created."
         else:
             r = self.world.restore()
+            armed = self.world.rearm()
             note = (f"The desk's Payment permission was restored: {r.engine_result}." if r
-                    else "The desk still holds its Payment permission.") + " Accounts and history stay as they are."
+                    else "The desk still holds its Payment permission.") + (f" {armed[:1].upper()}{armed[1:]}." if armed else "") + \
+                " Accounts and history stay as they are."
         w = self.world
         # the human's half of approving Northwind, on the daemon's own list, done at setup
         w.daemon.add_vendor("Northwind Freight", w.ring.northwind.classic_address)
@@ -599,9 +623,13 @@ class Flow:
     def s_kill(self):
         self.actor = "human"
         self.state("admin", "active")
-        self.log("admin", "pulls the kill switch: the paying account revokes the desk's permission")
-        self.log("admin", "signed with the paying account's key for now; the pre-signed break-glass file is in progress", "warn")
-        r = self.world.revoke()
+        if self.network != "local" and BREAK_GLASS.exists():
+            self.log("admin", "pulls the kill switch: submits break-glass/revoke.json, signed at setup; no key is used now")
+            r = self.world.ledger.submit(json.loads(BREAK_GLASS.read_text()))
+        else:
+            self.log("admin", "pulls the kill switch: the paying account revokes the desk's permission")
+            self.log("admin", "signed with the paying account's key: the local ledger has no tickets, so no pre-signed file here", "warn")
+            r = self.world.revoke()
         self.state("admin", "ok")
         self.pause()
         self.actor = "policy"
@@ -653,6 +681,7 @@ class Flow:
     NETWORK_BLURBS = {
         "approve": "A human approves Northwind Freight. On devnet it holds no registry credential, so the rules still refuse it.",
         "top_up": "A person refills the paying account with make topup; this page never holds the treasury key.",
+        "kill": "Submit the pre-signed break-glass file (no key), then try a fully signed payment. Reset re-arms it.",
     }
 
     def _vendor_drops(self) -> int:

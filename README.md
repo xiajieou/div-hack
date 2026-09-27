@@ -63,6 +63,7 @@ python scripts/setup_testnet.py     # accounts, 30 XRP float, delegation, 2-of-2
 make credentials                    # the registry issues "verified vendor" credentials; each vendor accepts
 make flow MODE=devnet               # the interactive view, now submitting real transactions
 make topup                          # a person refills the spend account from the treasury
+make kill                           # submit the pre-signed break-glass file; no key needed
 ```
 
 `make blast MODE=devnet` and `make audit-check MODE=devnet` read the same accounts. Keys stay in `.env` (gitignored); the treasury key is only ever used by `make topup`.
@@ -81,10 +82,10 @@ Fuse runs on **XRPL devnet, in XRP**. Permission Delegation, which the desk depe
 | Hash-chained audit log | Working |
 | Blast radius and audit completeness reports | Working |
 | Separate spend account, refilled by hand from a treasury | Working on devnet (`make topup`) |
-| Pre-signed break-glass file (kill switch that needs no key) | In progress; the demo currently revokes with the account key |
+| Pre-signed break-glass file (kill switch that needs no key) | Working on devnet: setup arms it, `make kill` or the flow view submits it; the local ledger has no tickets, so local mode revokes with the account key |
 | One-command devnet setup | Working |
 | Reader as its own process watching `inbox/` | Working (`make reader`). Deterministic extractor by default; with `OPENROUTER_API_KEY` set it asks a real model and falls back to the deterministic one if the call fails |
-| Dashboard | Working on the local ledger; kill switch button waits for the break-glass file |
+| Dashboard | Working; its kill switch button submits the break-glass file once setup has written it |
 | Vendor credentials from an on-ledger registry | Working, local and devnet (`make credentials`) |
 
 ## Team
