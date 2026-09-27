@@ -10,5 +10,6 @@ from ..registry import CREDENTIAL_TYPE_HEX
 def vendor_has_accepted_credential(ledger, vendor_address: str, registry_address: str) -> bool:
     if not registry_address:
         return False
-    return any(c["Issuer"] == registry_address and c["CredentialType"] == CREDENTIAL_TYPE_HEX and c["Flags"] & LSF_ACCEPTED
+    # Flags is omitted when zero, so a credential the subject has not accepted carries no flag
+    return any(c["Issuer"] == registry_address and c["CredentialType"] == CREDENTIAL_TYPE_HEX and c.get("Flags", 0) & LSF_ACCEPTED
                for c in ledger.credentials(vendor_address))

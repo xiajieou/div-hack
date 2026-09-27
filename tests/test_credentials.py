@@ -141,6 +141,35 @@ def test_corrupt_admin_adds_attacker_as_vendor_still_refused(world):
     assert admin_rows, "the admin action itself is still logged"
 
 
+def test_hook_treats_a_missing_flags_field_as_not_accepted():
+    registry, vendor = Wallet.create(), Wallet.create()
+
+    class Ledger:
+        def credentials(self, address):
+            return [{"Issuer": registry.classic_address, "CredentialType": CREDENTIAL_TYPE_HEX, "Subject": address}]
+
+    assert not vendor_has_accepted_credential(Ledger(), vendor.classic_address, registry.classic_address)
+
+
+def test_testnet_credentials_reads_account_objects(monkeypatch):
+    from types import SimpleNamespace
+    from fuse.ledger.testnet import TestnetLedger
+
+    entries = [
+        {"LedgerEntryType": "SignerList", "SignerQuorum": 2},
+        {"LedgerEntryType": "Credential", "Subject": "rVendor", "Issuer": "rRegistry", "CredentialType": TYPE_HEX, "Flags": 65536},
+    ]
+
+    class FakeClient:
+        def request(self, req):
+            assert req.account == "rVendor" and req.type == "credential"
+            return SimpleNamespace(result={"account_objects": entries})
+
+    ledger = TestnetLedger.__new__(TestnetLedger)
+    ledger.client = FakeClient()
+    assert ledger.credentials("rVendor") == [entries[1]]
+
+
 def test_hook_needs_registry_issuer_type_and_flag():
     registry, other, vendor = Wallet.create(), Wallet.create(), Wallet.create()
     ledger = _ledger_with(registry, other, vendor)
