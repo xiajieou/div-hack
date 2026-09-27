@@ -3,9 +3,16 @@ from xrpl.models.transactions import CredentialAccept, CredentialCreate, Credent
 from xrpl.wallet import Wallet
 
 from fuse.ledger.local import LSF_ACCEPTED, LocalLedger
+from fuse.registry import CREDENTIAL_TYPE_HEX, setup_local_registry
 from fuse.setup import _single_sign
+from tests.test_acceptance import world
 
 TYPE_HEX = b"verified-vendor".hex().upper()
+
+
+def _accepted_from(ledger, address, registry_address):
+    return [c for c in ledger.credentials(address)
+            if c["Issuer"] == registry_address and c["CredentialType"] == CREDENTIAL_TYPE_HEX and c["Flags"] & LSF_ACCEPTED]
 
 
 def _submit(ledger, model, wallet):
@@ -63,6 +70,25 @@ def test_issuer_can_revoke_and_subject_can_delete():
     by_subject = CredentialDelete(account=vendor.classic_address, issuer=registry.classic_address, credential_type=TYPE_HEX)
     assert _submit(ledger, by_subject, vendor).engine_result == "tesSUCCESS"
     assert ledger.credentials(vendor.classic_address) == []
+
+
+def test_world_vendors_hold_accepted_credentials_and_the_attacker_none(world):
+    assert CREDENTIAL_TYPE_HEX == TYPE_HEX
+    ledger, ring, registry = world["ledger"], world["ring"], world["registry"]
+    assert world["service"].registry == registry.classic_address
+    for w in [*ring.vendors.values(), ring.northwind]:
+        assert len(_accepted_from(ledger, w.classic_address, registry.classic_address)) == 1
+    assert ledger.credentials(ring.attacker.classic_address) == []
+
+
+def test_setup_local_registry_issues_and_accepts_once_per_vendor():
+    vendors = [Wallet.create(), Wallet.create()]
+    ledger = _ledger_with(*vendors)
+    registry = setup_local_registry(ledger, vendors)
+    assert all(len(_accepted_from(ledger, v.classic_address, registry.classic_address)) == 1 for v in vendors)
+    types = [h["type"] for h in ledger.history]
+    assert types == ["CredentialCreate", "CredentialAccept"] * 2
+    assert all(h["result"] == "tesSUCCESS" for h in ledger.history)
 
 
 def test_credential_transactions_are_signature_checked():

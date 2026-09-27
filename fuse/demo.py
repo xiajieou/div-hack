@@ -26,6 +26,7 @@ from .ledger.local import LocalLedger
 from .policy.builder import build_payment
 from .policy.service import MULTISIGN_FEE_DROPS, PolicyService
 from .reader.reader import INVOICES, hidden_text, pick_extractor, write_fixtures
+from .registry import setup_local_registry
 from .setup import KeyRing, revoke_delegation, run_setup
 from .signer.daemon import SignerDaemon
 
@@ -94,10 +95,12 @@ def main(argv=None) -> int:
     print(f"  agent key  {ring.agent.classic_address}   (inside the signer daemon)")
     print(f"  policy key {ring.policy.classic_address}   (inside the policy service)")
     print(f"  attacker   {ring.attacker.classic_address}")
+    registry = setup_local_registry(ledger, [*ring.vendors.values(), ring.northwind])
+    print(f"  registry   {registry.classic_address}   (issued verified-vendor credentials; every vendor accepted; the attacker has none)")
     print(f"  policy hash {policy.hash()[:16]}…  per-payment cap {policy.per_payment_cap_xrp} XRP, daily cap {policy.daily_cap_xrp} XRP")
 
     audit = AuditChain(policy.hash())
-    service = PolicyService(policy, ring.policy, ledger, treasury_addr, desk_addr, audit)
+    service = PolicyService(policy, ring.policy, ledger, treasury_addr, desk_addr, audit, registry.classic_address)
     daemon = SignerDaemon(ring.agent, treasury_addr, desk_addr,
                           {name: w.classic_address for name, w in ring.vendors.items()},
                           policy.fee_cap_drops, forward=service.handle_intent)

@@ -14,6 +14,7 @@ from fuse.ledger.local import LocalLedger
 from fuse.policy.builder import build_payment, decode_memo_commitment, invoice_id_hash
 from fuse.policy.rules import Intent, evaluate
 from fuse.policy.service import MULTISIGN_FEE_DROPS, PolicyService
+from fuse.registry import setup_local_registry
 from fuse.setup import KeyRing, revoke_delegation, run_setup
 from fuse.signer.daemon import Refusal, SignerDaemon
 from fastapi.testclient import TestClient
@@ -28,8 +29,10 @@ def world(request):
     ledger = LocalLedger()
     ring = KeyRing.local(ledger, policy)
     run_setup(ledger, ring, delegation=True)
+    registry = setup_local_registry(ledger, [*ring.vendors.values(), ring.northwind])
     audit = AuditChain(policy.hash())
-    service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit)
+    service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit,
+                            registry.classic_address)
     daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
                           {name: w.classic_address for name, w in ring.vendors.items()}, policy.fee_cap_drops, forward=service.handle_intent)
     service.attach_daemon(daemon)
@@ -45,7 +48,7 @@ def world(request):
         signer_client = TestClient(create_signer_app(daemon))
         service.attach_daemon(DaemonClient("", ring.agent.classic_address, signer_client))
 
-    return dict(policy=policy, ledger=ledger, ring=ring, audit=audit, service=service, daemon=daemon)
+    return dict(policy=policy, ledger=ledger, ring=ring, audit=audit, service=service, daemon=daemon, registry=registry)
 
 
 def run_intent(w, **kw):

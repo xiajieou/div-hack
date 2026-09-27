@@ -25,6 +25,7 @@ from ..ledger.local import LocalLedger
 from ..policy.builder import build_payment
 from ..policy.service import MULTISIGN_FEE_DROPS, PolicyService
 from ..reader.reader import INVOICES, naive_extract
+from ..registry import setup_local_registry
 from ..setup import KeyRing, run_setup
 from ..signer.daemon import SignerDaemon
 
@@ -86,7 +87,8 @@ class LocalWorld(LedgerSource):
         self.ledger.fund(treasury, 1_000_000_000)
         self.addresses = {"treasury": treasury, "spend": spend, "desk": desk}
         self.audit = AuditChain(self.policy.hash())
-        self.service = PolicyService(self.policy, ring.policy, self.ledger, spend, desk, self.audit)
+        registry = setup_local_registry(self.ledger, ring.vendors.values())
+        self.service = PolicyService(self.policy, ring.policy, self.ledger, spend, desk, self.audit, registry.classic_address)
         self.daemon = SignerDaemon(ring.agent, spend, desk, {name: w.classic_address for name, w in ring.vendors.items()},
                                    self.policy.fee_cap_drops, forward=self.service.handle_intent)
         self.service.attach_daemon(self.daemon)

@@ -114,6 +114,7 @@ def test_local_mode_with_daemon_url_publishes_facts_and_no_seed(tmp_path, monkey
     assert accounts["treasury"] == service.treasury and accounts["desk"] == service.desk
     assert vendors == {name: v.address for name, v in service.policy.allowlist.items()}
     # public facts only: a fixed key set, and every value is a classic address, never a seed or key
-    assert set(accounts) == {"network", "treasury", "desk", "policy", "attacker", "northwind"}
+    assert set(accounts) == {"network", "treasury", "desk", "policy", "registry", "attacker", "northwind"}
+    assert accounts["registry"] == service.registry
     for value in [v for k, v in accounts.items() if k != "network"] + list(vendors.values()):
         assert is_valid_classic_address(value)

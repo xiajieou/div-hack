@@ -27,6 +27,7 @@ from ..config import default_policy
 from ..ledger.local import LocalLedger
 from ..ledger.testnet import TestnetLedger
 from ..reports.api import add_routes
+from ..registry import setup_local_registry
 from ..setup import KeyRing, run_setup
 from ..signer.daemon import Refusal, SignerDaemon
 
@@ -96,11 +97,13 @@ def _local_service(agent_address: str | None = None) -> PolicyService:
         # the agent key lives in the daemon process; only its address goes on the desk signer list (D17)
         ring.agent = SimpleNamespace(classic_address=agent_address)
     run_setup(ledger, ring, delegation=True)
+    registry = setup_local_registry(ledger, [*ring.vendors.values(), ring.northwind])
     audit = AuditChain(policy.hash())
-    service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit)
+    service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit,
+                            registry.classic_address)
     vendors = {name: w.classic_address for name, w in ring.vendors.items()}
     if agent_address:
-        _write_public_facts(ring, vendors)
+        _write_public_facts(ring, vendors, registry.classic_address)
         return service
     daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
                           vendors, policy.fee_cap_drops, forward=service.handle_intent)
@@ -108,7 +111,7 @@ def _local_service(agent_address: str | None = None) -> PolicyService:
     return service 
 
 
-def _write_public_facts(ring: KeyRing, vendors: dict) -> None:
+def _write_public_facts(ring: KeyRing, vendors: dict, registry: str) -> None:
     """Same shape the testnet setup script writes, so the daemon and reader read one format. Addresses only."""
     env = Path("env")
     env.mkdir(exist_ok=True)
@@ -117,6 +120,7 @@ def _write_public_facts(ring: KeyRing, vendors: dict) -> None:
         "treasury": ring.treasury.classic_address,
         "desk": ring.desk.classic_address,
         "policy": ring.policy.classic_address,
+        "registry": registry,
         "attacker": ring.attacker.classic_address,
         "northwind": ring.northwind.classic_address,
     }
