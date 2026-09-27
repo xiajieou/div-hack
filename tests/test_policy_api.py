@@ -1,6 +1,7 @@
 import dataclasses
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 from xrpl.core.addresscodec import is_valid_classic_address
 from xrpl.models.transactions import DelegateSet
@@ -131,19 +132,21 @@ def _network_service(tmp_path, monkeypatch, network, accounts):
     return _service_from_env()
 
 
+NETWORK_ACCOUNTS = {"treasury": "rTreasury", "spend": "rSpend", "desk": "rDesk", "registry": "rRegistry"}
+
+
 def test_network_devnet_uses_the_devnet_rpc(tmp_path, monkeypatch):
-    accounts = {"treasury": "rTreasury", "desk": "rDesk", "registry": "rRegistry"}
-    service = _network_service(tmp_path, monkeypatch, "devnet", accounts)
+    service = _network_service(tmp_path, monkeypatch, "devnet", NETWORK_ACCOUNTS)
     assert service.ledger.rpc_url == DEVNET_RPC
     assert service.desk == "rDesk" and service.registry == "rRegistry"
-    assert _network_service(tmp_path, monkeypatch, "testnet", accounts).ledger.rpc_url == TESTNET_RPC
+    assert _network_service(tmp_path, monkeypatch, "testnet", NETWORK_ACCOUNTS).ledger.rpc_url == TESTNET_RPC
 
 
-def test_network_mode_pays_from_the_spend_account_when_setup_wrote_one(tmp_path, monkeypatch):
-    accounts = {"treasury": "rTreasury", "spend": "rSpend", "desk": "rDesk"}
-    assert _network_service(tmp_path, monkeypatch, "devnet", accounts).treasury == "rSpend"
-    del accounts["spend"]
-    assert _network_service(tmp_path, monkeypatch, "devnet", accounts).treasury == "rTreasury"
+def test_network_mode_pays_from_the_spend_account_never_the_treasury(tmp_path, monkeypatch):
+    assert _network_service(tmp_path, monkeypatch, "devnet", NETWORK_ACCOUNTS).treasury == "rSpend"
+    without_spend = {k: v for k, v in NETWORK_ACCOUNTS.items() if k != "spend"}
+    with pytest.raises(KeyError, match="spend"):
+        _network_service(tmp_path, monkeypatch, "devnet", without_spend)
 
 
 def test_network_unset_or_unknown_is_local(tmp_path, monkeypatch):

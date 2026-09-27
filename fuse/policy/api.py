@@ -137,9 +137,7 @@ def _service_from_env() -> PolicyService:
         wallet = Wallet.from_seed(os.environ["POLICY_SEED"])
         policy = default_policy()
         audit = AuditChain(policy.hash())
-        # the setup script writes a separate spend account; the local ring pays from one account
-        paying = accounts.get("spend") or accounts["treasury"]
-        service = PolicyService(policy, wallet, TestnetLedger(rpc), paying, accounts["desk"], audit, accounts.get("registry"))
+        service = PolicyService(policy, wallet, TestnetLedger(rpc), accounts["spend"], accounts["desk"], audit, accounts.get("registry"))
     elif daemon_url:
         service = _local_service(os.environ["AGENT_ADDRESS"])
     else:
