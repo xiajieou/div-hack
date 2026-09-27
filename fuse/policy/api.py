@@ -10,12 +10,14 @@ from __future__ import annotations
 import dataclasses # which turns an Outcome dataclass into a plain dict 
 import httpx
 from fastapi import Body, FastAPI 
+from fastapi.responses import JSONResponse
 from .rules import Intent
-from .service import PolicyService
+from .service import AdminError, PolicyService
 import json 
 import os 
 from pathlib import Path
 from types import SimpleNamespace
+from xrpl.core.addresscodec import is_valid_classic_address
 from xrpl.wallet import Wallet
 
 from ..audit import AuditChain 
@@ -72,7 +74,10 @@ def create_app(service: PolicyService) -> FastAPI:
 
     @app.post("/admin/vendor")
     def admin_vendor(body: dict = Body()):
-        reruns = service.admin_add_vendor(body["name"], body["address"], body["jurisdiction"], body.get("actor", "human"))
+        try:
+            reruns = service.admin_add_vendor(body["name"], body["address"], body["jurisdiction"], body.get("actor", "human"))
+        except AdminError as exc:
+            return JSONResponse(status_code=400, content={"detail": str(exc)})
         return [dataclasses.asdict(o) for o in reruns]
 
     @app.post("/submit-file")
@@ -120,8 +125,10 @@ def _write_public_facts(ring: KeyRing, vendors: dict, registry: str) -> None:
         "registry": registry,
         "attacker": ring.attacker.classic_address,
         "northwind": ring.northwind.classic_address,
+        "vendors": vendors,
     }
     (env / "accounts.json").write_text(json.dumps(accounts, indent=2))
+    # the daemon's own directory; the policy never reads this file
     (env / "vendors.json").write_text(json.dumps(vendors, indent=2))
 
 
@@ -138,6 +145,15 @@ def _service_from_env() -> PolicyService:
             raise SystemExit(f"env/accounts.json was written for {accounts['network']}, NETWORK is {network}")
         wallet = Wallet.from_seed(os.environ["POLICY_SEED"])
         policy = default_policy()
+        # setup writes the vendor addresses here; the daemon reads its own env/vendors.json
+        allowlist = accounts.get("vendors", {})
+        for name in policy.allowlist:
+            if name not in allowlist:
+                raise SystemExit(f"env/accounts.json vendors block is missing {name!r}")
+            address = allowlist[name]
+            if not is_valid_classic_address(address):
+                raise SystemExit(f"env/accounts.json has an invalid address for vendor {name!r}")
+            policy.allowlist[name].address = address
         audit = AuditChain(policy.hash())
         service = PolicyService(policy, wallet, TestnetLedger(rpc), accounts["spend"], accounts["desk"], audit, accounts.get("registry"))
     elif daemon_url:

@@ -72,6 +72,9 @@ class LedgerSource:
         return [_entry(h["type"], h["account"], h["delegate"], h["destination"], h["result"], h["hash"], h["amount"])
                 for h in self.ledger.history if address in (h["account"], h["destination"])]
 
+    def balance_drops(self, address: str) -> int:
+        return self.ledger.accounts[address].balance_drops if address in self.ledger.accounts else 0
+
 
 class LocalWorld(LedgerSource):
     """A fresh local ledger with the full setup, the policy service and the signer daemon wired together."""

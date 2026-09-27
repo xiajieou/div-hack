@@ -23,17 +23,19 @@ class Budget:
     def __init__(self, daily_cap_drops: int, per_hour_max: int, path: str = ":memory:") -> None:
         self.daily_cap_drops = daily_cap_drops
         self.per_hour_max = per_hour_max
-        self._lock = threading.Lock()  # SQLite in-memory databases are per-connection; a lock keeps one connection safe
+        self._lock = threading.RLock()  # SQLite in-memory databases are per-connection; a lock keeps one connection safe
         self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._db.execute("CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, drops INTEGER NOT NULL, status TEXT NOT NULL, created REAL NOT NULL)")
 
     def committed_drops(self) -> int:
-        row = self._db.execute("SELECT COALESCE(SUM(drops),0) FROM reservations WHERE status IN ('reserved','settled')").fetchone()
-        return int(row[0])
+        with self._lock:
+            row = self._db.execute("SELECT COALESCE(SUM(drops),0) FROM reservations WHERE status IN ('reserved','settled')").fetchone()
+            return int(row[0])
 
     def payments_last_hour(self) -> int:
-        row = self._db.execute("SELECT COUNT(*) FROM reservations WHERE status IN ('reserved','settled') AND created > ?", (time.time() - 3600,)).fetchone()
-        return int(row[0])
+        with self._lock:
+            row = self._db.execute("SELECT COUNT(*) FROM reservations WHERE status IN ('reserved','settled') AND created > ?", (time.time() - 3600,)).fetchone()
+            return int(row[0])
 
     def reserve(self, drops: int) -> str:
         """Atomically reserve drops against the daily cap. Raises BudgetError if the cap or velocity would be exceeded."""

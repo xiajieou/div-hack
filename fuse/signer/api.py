@@ -14,9 +14,11 @@ import httpx
 import uvicorn
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
+from xrpl.models.transactions import Payment
 from xrpl.wallet import Wallet
 
 from ..config import default_policy
+from ..audit import public_text
 from ..policy.rules import Intent
 from .daemon import Refusal, SignerDaemon
 
@@ -49,6 +51,12 @@ def create_app(daemon: SignerDaemon, vendors_file: str | None = None) -> FastAPI
         if vendors_file is not None:
             daemon.directory = json.loads(Path(vendors_file).read_text())
         try:
+            canonical = Payment.from_xrpl(body["tx"]).to_xrpl()
+        except Exception as exc:
+            return JSONResponse(status_code=403, content={"reason": public_text(str(exc))})
+        if canonical != body["tx"]:
+            return JSONResponse(status_code=403, content={"reason": "transaction is not in canonical form"})
+        try:
             return daemon.sign(body["tx"], body["nonce"])
         except Refusal as exc:
             return JSONResponse(status_code=403, content={"reason": str(exc)})
@@ -80,7 +88,7 @@ def build_daemon_from_env() -> SignerDaemon:
 
     return SignerDaemon(
         wallet,
-        accounts["treasury"],
+        accounts["spend"],
         accounts.get("desk"),
         vendors,
         default_policy().fee_cap_drops,

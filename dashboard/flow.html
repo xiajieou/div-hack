@@ -198,6 +198,8 @@ td.num.zero{color:var(--pass)}
 .term .l::before{content:"$ ";color:#5E6E7C}
 .term .good{color:#6FD6A0} .term .bad{color:#FF8A80} .term .warn{color:#FFC96B}
 .term .empty{color:#5E6E7C}
+.term a{color:#8EC5FF}
+.caption a{color:inherit;font-weight:600}
 .doc{font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface-2);border-radius:10px;padding:10px 12px}
 .doc mark{background:var(--accent-soft);color:var(--accent-ink);border:1px dashed var(--accent);border-radius:4px;display:block;padding:6px;margin-top:6px}
 .foot{margin-top:18px;font-size:12.5px;color:var(--muted)}
@@ -229,7 +231,7 @@ td.num.zero{color:var(--pass)}
     </div>
     <div class="chips">
       <span class="chip"><span class="dot" id="live-dot"></span><span id="live-text">connecting</span></span>
-      <span class="anchor"><button class="chip chip-btn" type="button" aria-expanded="false" aria-controls="net-info">local ledger, real signature checks</button><div class="info-pop" id="net-info" role="dialog" aria-label="About the network"><button class="info-close" type="button" aria-label="Close">&times;</button><p>Where this runs. Here: a local copy of the XRP Ledger's rules on this computer. It checks real signatures, signer lists and permissions, so every scenario is instant and repeatable. The same code runs on XRPL devnet, the public test network, where the desk's delegated two-signature payments were confirmed with real transactions.</p></div></span>
+      <span class="anchor"><button class="chip chip-btn" type="button" aria-expanded="false" aria-controls="net-info" id="net-chip">local ledger, real signature checks</button><div class="info-pop" id="net-info" role="dialog" aria-label="About the network"><button class="info-close" type="button" aria-label="Close">&times;</button><p id="net-text" data-devnet="Where this runs. Here: XRPL devnet, the public test network, in XRP. Every payment, refusal and kill switch below is a real transaction on accounts the setup script created; successful and tec results link to the devnet explorer, while tem/tef/ter refusals never enter a ledger and so have no page there. Permission Delegation, which the desk depends on, is live on devnet and not yet on testnet.">Where this runs. Here: a local copy of the XRP Ledger's rules on this computer. It checks real signatures, signer lists and permissions, so every scenario is instant and repeatable. The same code runs on XRPL devnet, the public test network, where the desk's delegated two-signature payments were confirmed with real transactions.</p></div></span>
       <span class="anchor"><button class="chip chip-btn mono" id="policy-chip" type="button" aria-expanded="false" aria-controls="policy-info">policy …</button><div class="info-pop" id="policy-info" role="dialog" aria-label="About the policy hash"><button class="info-close" type="button" aria-label="Close">&times;</button><p>A fingerprint (SHA-256) of the written rules: caps, vendor list and allowed countries. It is stamped into every payment's memo, so anyone can later prove which rules approved it. Approving a vendor changes the rules, so the fingerprint changes. Watch it during “Admin approves vendor”.</p></div></span>
       <button class="btn" id="reset" type="button">Reset</button>
     </div>
@@ -429,7 +431,7 @@ function renderPop() {
     const mark = { ok: "&#10003;", fail: "&#10005;", park: "!", skip: "–", pending: "" };
     html += `<h4>Checks</h4><ul class="checks">${m.checks.map((c) => `<li class="${c.state}"><span class="m">${mark[c.state] ?? ""}</span><span>${esc(c.label)}</span></li>`).join("")}</ul>`;
   }
-  html += `<h4>Live output</h4><div class="term" id="term">${m.logs.length ? m.logs.map((l) => `<div class="l ${l.level}">${esc(l.text)}</div>`).join("") : '<div class="empty">nothing yet in this run</div>'}</div>`;
+  html += `<h4>Live output</h4><div class="term" id="term">${m.logs.length ? m.logs.map((l) => `<div class="l ${l.level}">${linkify(l.text)}</div>`).join("") : '<div class="empty">nothing yet in this run</div>'}</div>`;
   $("pop-body").innerHTML = html;
   const t = $("term"); t.scrollTop = t.scrollHeight;
 }
@@ -461,7 +463,7 @@ document.addEventListener("click", closeInfo);
 // ----- events from the server -----
 function touch(k) { if (model[k] && !model[k].touched) { model[k].touched = true; paintNode(k); } }
 function handle(e) {
-  if (e.type === "hello" || e.type === "reset") { if (e.type === "reset") { blank(); invoiceDoc = null; Object.keys(NODES).forEach(paintNode); setCaption("", "Fresh start", "Every account, key and vendor was just created again."); } refresh(); return; }
+  if (e.type === "hello" || e.type === "reset") { if (e.type === "reset") { blank(); invoiceDoc = null; Object.keys(NODES).forEach(paintNode); setCaption("", "Fresh start", e.text || "Every account, key and vendor was just created again."); } refresh(); return; }
   if (e.type === "start") {
     running = e.scenario; blank(); invoiceDoc = null; Object.keys(NODES).forEach(paintNode); markRunning();
     setCaption("run", e.title, e.blurb); if (shown) renderPop(); return;
@@ -469,7 +471,7 @@ function handle(e) {
   if (e.type === "end") {
     running = null; markRunning();
     for (const k in model) if (model[k].state === "active") { model[k].state = "idle"; paintNode(k); }
-    setCaption(e.kind, e.title, e.text);
+    setCaption(e.kind, e.title, e.text, e.link);
     if (e.by && model[e.by]) { model[e.by].here = true; paintNode(e.by); if ($("follow").checked && !pinned) showPop(e.by); }
     refresh(); return;
   }
@@ -486,9 +488,12 @@ function handle(e) {
   if (e.type === "checks") m.checks = e.items;
   if (shown === e.box) renderPop();
 }
-function setCaption(kind, title, text) {
+function linkify(text) {
+  return esc(text).replace(/https:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+}
+function setCaption(kind, title, text, link) {
   const c = $("caption"); c.className = "caption " + (kind || "");
-  c.innerHTML = `<div class="t">${esc(title)}</div><div class="d">${esc(text)}</div>`;
+  c.innerHTML = `<div class="t">${esc(title)}</div><div class="d">${linkify(text)}${link ? ` <a href="${esc(link)}" target="_blank" rel="noopener">See it on the devnet explorer</a>` : ""}</div>`;
 }
 function connect() {
   const es = new EventSource("/flow/events");
@@ -538,6 +543,12 @@ async function refresh() {
   try { snap = await (await fetch("/flow/state", { cache: "no-store" })).json(); } catch { return; }
   if (!document.querySelector(".scen")) renderControls(snap.scenarios);
   $("policy-chip").textContent = "policy " + snap.policy_hash.slice(0, 10);
+  if (snap.network !== "local" && !document.body.dataset.net) {
+    document.body.dataset.net = snap.network;
+    $("net-chip").textContent = "XRPL " + snap.network + ", live";
+    $("net-text").textContent = $("net-text").dataset.devnet;
+    document.querySelector(".foot").textContent = "Runs on XRPL " + snap.network + " with the accounts the setup script created. The treasury key stays with a person (make topup). This page holds no keys.";
+  }
   for (const [k, n] of Object.entries(NODES)) if (n.bal && $("b-" + k)) $("b-" + k).textContent = (n.recv ? "received " : "") + xrp(snap.balances[n.bal]);
   $("f-desk").textContent = snap.delegation ? "permission: " + snap.delegation : "permission revoked";
   if (snap.error) return;
@@ -547,7 +558,7 @@ async function refresh() {
     : `<div class="find ok">&#10003; No setup mistakes found${snap.delegation ? "" : ". The desk's permission is revoked, so both keys together can move nothing"}.</div>`;
   if (blast + findings !== lastBlast) { $("blast").innerHTML = blast; $("findings").innerHTML = findings; if (lastBlast) flash("blast-panel"); lastBlast = blast + findings; }
   const a = snap.audit, map = { [snap.blast.accounts.spend.address]: "paying account" };
-  const audit = `<div class="big">${a.outgoing - a.unlogged.length} of ${a.outgoing}</div><div class="muted" style="font-size:13px">payments out of the paying account are in our audit log</div>` +
+  const audit = `<div class="big">${a.outgoing - a.unlogged.length} of ${a.outgoing}</div><div class="muted" style="font-size:13px">payments out of the paying account${snap.network !== "local" ? " since this session started" : ""} are in our audit log</div>` +
     (a.unlogged.length ? `<div class="flag"><b>${a.unlogged.length} the log never saw</b> — they went around the policy service.${a.unlogged.map((t) => `<div>${esc(t.amount)} to <span class="mono">${esc(t.destination.slice(0, 6))}…</span></div>`).join("")}</div>`
       : `<div class="clean">&#10003; Nothing left without going through the rules.</div>`);
   if (audit !== lastAudit) { $("audit").innerHTML = audit; if (lastAudit) flash("audit-panel"); lastAudit = audit; }
@@ -559,6 +570,7 @@ addEventListener("resize", () => { drawEdges(); if (shown) showPop(shown); });
 document.fonts && document.fonts.ready.then(drawEdges);
 connect();
 refresh();
+setInterval(() => { if (!running && document.body.dataset.net) refresh(); }, 8000);
 </script>
 </body>
 </html>

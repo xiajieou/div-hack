@@ -56,6 +56,31 @@ def test_admin_add_vendor_reruns_parked(world):
     assert any(row["kind"] == "admin" for row in service.audit.dump())
 
 
+def test_admin_add_vendor_refuses_replace_and_invalid_address(world):
+    service = world["service"]
+    client = TestClient(create_app(service))
+    existing = service.policy.allowlist["Baltic Freight"]
+    before = (existing.address, existing.jurisdiction)
+    replace = client.post("/admin/vendor", json={
+        "name": "Baltic Freight",
+        "address": world["ring"].northwind.classic_address,
+        "jurisdiction": "US",
+        "actor": "cfo@company",
+    })
+    assert replace.status_code == 400
+    assert "never replaces" in replace.json()["detail"]
+    assert (service.policy.allowlist["Baltic Freight"].address,
+            service.policy.allowlist["Baltic Freight"].jurisdiction) == before
+    bad = client.post("/admin/vendor", json={
+        "name": "Brand New Co",
+        "address": "not-an-address",
+        "jurisdiction": "US",
+    })
+    assert bad.status_code == 400
+    assert "invalid classic address" in bad.json()["detail"]
+    assert "Brand New Co" not in service.policy.allowlist
+
+
 def test_submit_file_revokes_then_payment_rejected(world, tmp_path, monkeypatch):
     service = world["service"]
     ring = world["ring"]
@@ -122,10 +147,31 @@ def test_sign_exception_is_redacted_before_it_is_returned(world):
     assert "[redacted]" in published
 
 
-def _network_service(tmp_path, monkeypatch, network, accounts):
+def test_public_text_redacts_secrets_not_addresses_or_hashes(world):
+    from xrpl.constants import CryptoAlgorithm
+    from fuse.audit import public_text
+
+    address = world["policy"].allowlist["Lumen Legal"].address
+    tx_hash = "A" * 64
+    assert public_text(address) == address
+    assert public_text(tx_hash) == tx_hash
+
+    ed = Wallet.create()
+    secp = Wallet.create(algorithm=CryptoAlgorithm.SECP256K1)
+    for w in (ed, secp):
+        redacted = public_text(f"leak {w.seed} {w.private_key}")
+        assert w.seed not in redacted
+        assert w.private_key not in redacted
+        assert "[redacted]" in redacted
+
+
+def _network_service(tmp_path, monkeypatch, network, accounts, allowlist=None):
+    from fuse.config import default_policy
     monkeypatch.chdir(tmp_path)
     (tmp_path / "env").mkdir(exist_ok=True)
-    (tmp_path / "env" / "accounts.json").write_text(json.dumps(accounts))
+    if allowlist is None:
+        allowlist = {name: Wallet.create().classic_address for name in default_policy().allowlist}
+    (tmp_path / "env" / "accounts.json").write_text(json.dumps({**accounts, "vendors": allowlist}))
     monkeypatch.setenv("NETWORK", network)
     monkeypatch.setenv("POLICY_SEED", Wallet.create().seed)
     monkeypatch.delenv("DAEMON_URL", raising=False)
@@ -147,6 +193,22 @@ def test_network_mode_pays_from_the_spend_account_never_the_treasury(tmp_path, m
     without_spend = {k: v for k, v in NETWORK_ACCOUNTS.items() if k != "spend"}
     with pytest.raises(KeyError, match="spend"):
         _network_service(tmp_path, monkeypatch, "devnet", without_spend)
+
+
+def test_network_mode_loads_vendor_addresses_from_the_setup_file(tmp_path, monkeypatch):
+    from fuse.config import default_policy
+    allowlist = {name: Wallet.create().classic_address for name in default_policy().allowlist}
+    service = _network_service(tmp_path, monkeypatch, "devnet", NETWORK_ACCOUNTS, allowlist=allowlist)
+    for name, record in service.policy.allowlist.items():
+        assert record.address == allowlist[name]
+
+
+def test_network_mode_refuses_invalid_allowlist_address(tmp_path, monkeypatch):
+    from fuse.config import default_policy
+    allowlist = {name: Wallet.create().classic_address for name in default_policy().allowlist}
+    allowlist["Lumen Legal"] = "not-a-classic-address"
+    with pytest.raises(SystemExit, match="Lumen Legal"):
+        _network_service(tmp_path, monkeypatch, "devnet", NETWORK_ACCOUNTS, allowlist=allowlist)
 
 
 @pytest.mark.parametrize("value", [None, "local"])
@@ -185,7 +247,8 @@ def test_local_mode_with_daemon_url_publishes_facts_and_no_seed(tmp_path, monkey
     accounts = json.loads((tmp_path / "env" / "accounts.json").read_text())
     vendors = json.loads((tmp_path / "env" / "vendors.json").read_text())
     assert accounts["treasury"] == service.treasury and accounts["desk"] == service.desk
-    assert vendors == {name: v.address for name, v in service.policy.allowlist.items()}
+    expected = {name: v.address for name, v in service.policy.allowlist.items()}
+    assert vendors == expected and accounts.pop("vendors") == expected
     # public facts only: a fixed key set, and every value is a classic address, never a seed or key
     assert set(accounts) == {"network", "treasury", "spend", "desk", "policy", "registry", "attacker", "northwind"}
     assert accounts["spend"] == service.treasury

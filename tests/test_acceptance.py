@@ -104,6 +104,35 @@ def test_ac06_duplicate_invoice_refused(world):
     assert o.status == "refused" and any("already paid" in f for f in o.failed)
 
 
+@pytest.mark.parametrize("world", ["direct"], indirect=True)
+def test_ac06_duplicate_invoice_refused_under_concurrency(world, monkeypatch):
+    # http/two-apps use TestClient; not safe to drive from worker threads
+    service = world["service"]
+    daemon = world["daemon"]
+    vendor_addr = world["policy"].allowlist["Harbor Cloud Hosting"].address
+    n = 6
+    barrier = threading.Barrier(n)
+    real_reserve = service.budget.reserve
+
+    def gated_reserve(drops):
+        barrier.wait()
+        return real_reserve(drops)
+
+    monkeypatch.setattr(service.budget, "reserve", gated_reserve)
+    results = []
+
+    def worker():
+        it = Intent(vendor="Harbor Cloud Hosting", amount="1.00", invoice_id="INV-7734")
+        nonce = daemon.register(it)
+        results.append(service.outcomes[nonce])
+
+    threads = [threading.Thread(target=worker) for _ in range(n)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert sum(1 for o in results if o.status == "paid") == 1
+    assert len([h for h in world["ledger"].history if h.get("destination") == vendor_addr]) == 1
+
+
 # ---------- AC7: unknown destination parks; admin add-vendor reruns through the normal flow ----------
 def test_ac07_unknown_vendor_parked_then_rerun(world):
     o = run_intent(world, vendor="Northwind Freight", amount="6.40", invoice_id="INV-5510")
@@ -214,6 +243,39 @@ def test_ac11_audit_chain_verifies_and_detects_tamper(world):
     assert not ok and "altered" in msg
 
 
+def test_audit_appends_are_serialised_under_concurrency(world, monkeypatch):
+    import sys
+    import time
+    import fuse.audit as audit_mod
+    service = world["service"]
+    audit = service.audit
+    before = len(audit.rows)
+    barrier = threading.Barrier(8)
+    real_h = audit_mod._h
+
+    def yielding_h(prev, record):
+        time.sleep(0)
+        return real_h(prev, record)
+
+    monkeypatch.setattr(audit_mod, "_h", yielding_h)
+    prev_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        def worker():
+            barrier.wait()
+            for _ in range(20):
+                audit.refused({"vendor": "x"}, ["x"])
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+    finally:
+        sys.setswitchinterval(prev_interval)
+    ok, msg = audit.verify(service.memos_by_tx_hash)
+    assert ok, msg
+    assert len(audit.rows) == before + 8 * 20
+
+
 def test_ac11_memo_carries_commitment_made_before_submission(world):
     o = run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
     vendor = world["policy"].allowlist["Verdant Print Co"]
@@ -236,6 +298,61 @@ def test_ac13_malformed_amount_refused(world, amount):
 def test_ac13_missing_invoice_id_refused(world):
     o = run_intent(world, vendor="Verdant Print Co", amount="1", invoice_id="")
     assert o.status == "refused" and world["service"].budget.committed_drops() == 0
+
+
+def test_budget_released_when_next_sequence_raises(world, monkeypatch):
+    service = world["service"]
+
+    def boom(account):
+        raise RuntimeError("next_sequence failed")
+
+    monkeypatch.setattr(service.ledger, "next_sequence", boom)
+    with pytest.raises(RuntimeError, match="next_sequence failed"):
+        run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
+    assert service.budget.committed_drops() == 0
+    assert "INV-2201" not in service.in_flight
+
+
+def test_budget_held_when_submit_raises(world, monkeypatch):
+    service = world["service"]
+    reserved = int(xrp_to_drops(Decimal("12.40")))
+
+    def boom(tx):
+        raise RuntimeError("submit failed")
+
+    monkeypatch.setattr(service.ledger, "submit", boom)
+    with pytest.raises(RuntimeError, match="submit failed"):
+        run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
+    assert service.budget.committed_drops() == reserved
+    assert "INV-2201" not in service.in_flight
+    assert any(r.kind == "note" and "reservation held" in r.record.get("text", "") for r in service.audit.rows)
+
+
+def test_agent_signature_must_use_agent_key(world, monkeypatch):
+    from xrpl.core.binarycodec import encode_for_multisigning
+    from xrpl.core.keypairs import sign as kp_sign
+    from xrpl.wallet import Wallet as XRPLWallet
+    from fuse.policy.builder import strip_signatures
+    service = world["service"]
+    before = len(world["ledger"].history)
+    impostor = XRPLWallet.create()
+
+    def forged_sign(tx, nonce):
+        payload = encode_for_multisigning(strip_signatures(tx), world["daemon"].address)
+        sig = kp_sign(bytes.fromhex(payload), impostor.private_key)
+        out = dict(tx)
+        out["Signers"] = [{"Signer": {
+            "Account": world["daemon"].address,
+            "SigningPubKey": impostor.public_key,
+            "TxnSignature": sig,
+        }}]
+        return out
+
+    monkeypatch.setattr(service.daemon, "sign", forged_sign)
+    o = run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
+    assert o.status == "refused"
+    assert any("agent signature is not valid for the agent key" in f for f in o.failed)
+    assert len(world["ledger"].history) == before
 
 
 # ---------- AC15: allowlisted vendor in a disallowed jurisdiction is refused ----------

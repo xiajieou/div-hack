@@ -41,7 +41,8 @@ def test_sign_refuses_mutations(world, name):
     MUTATIONS[name](bad, world)
     response = client.post("/sign", json={"tx": bad, "nonce": nonce})
     assert response.status_code == 403
-    assert "signer daemon refused" in response.json()["reason"]
+    assert daemon.intents[nonce].signatures_issued == 0
+    assert response.json()["reason"]
     assert world["ring"].agent.seed not in response.text
 
 
@@ -57,6 +58,16 @@ def test_unknown_and_settled_nonce_refused(world):
     seed = world["ring"].agent.seed
     assert seed not in unknown.text
     assert seed not in settled.text
+
+
+def test_sign_refuses_non_canonical_destination(world):
+    client, daemon, nonce, tx = _client_and_tx(world)
+    bad = dict(tx)
+    bad["destination"] = world["ring"].attacker.classic_address
+    response = client.post("/sign", json={"tx": bad, "nonce": nonce})
+    assert response.status_code == 403
+    assert response.json()["reason"] == "transaction is not in canonical form"
+    assert daemon.intents[nonce].signatures_issued == 0
 
 
 def test_address_hides_seed(world):
@@ -110,8 +121,11 @@ def test_vendors_file_reloaded_on_sign(world, tmp_path):
 
 def test_build_daemon_from_env_ignores_accounts_vendors(world, tmp_path, monkeypatch):
     lumen_addr = world["policy"].allowlist["Lumen Legal"].address
+    spend = world["ring"].treasury.classic_address
+    treasury = world["ring"].attacker.classic_address  # different from spend
     accounts = {
-        "treasury": world["ring"].treasury.classic_address,
+        "treasury": treasury,
+        "spend": spend,
         "desk": world["ring"].desk.classic_address,
         "vendors": {"Lumen Legal": world["ring"].attacker.classic_address},
     }
@@ -126,3 +140,5 @@ def test_build_daemon_from_env_ignores_accounts_vendors(world, tmp_path, monkeyp
     daemon = build_daemon_from_env()
     assert daemon.directory == vendors
     assert daemon.address == world["ring"].agent.classic_address
+    assert daemon.treasury == accounts["spend"]
+    assert daemon.treasury != accounts["treasury"]

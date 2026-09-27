@@ -12,11 +12,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 GENESIS = "0" * 64
+_B58 = r"1-9A-HJ-NP-Za-km-z"
+_HEX = r"0-9A-Fa-f"
+# whole XRPL seeds and private keys only; lookarounds stop mid-address / mid-hex matches
+_SECRET = re.compile(
+    rf"(?<![{_B58}])(?:sEd[{_B58}]{{28}}|s[{_B58}]{{28,29}})(?![{_B58}])|"
+    rf"(?<![{_HEX}])(?:ED[{_HEX}]{{64}}|00[{_HEX}]{{64}})(?![{_HEX}])"
+)
+
+
+def public_text(text: str) -> str:
+    """Exception and ledger messages are returned over HTTP and written to the audit log."""
+    return _SECRET.sub("[redacted]", text)
 
 
 def _h(prev: str, record: dict) -> str:
@@ -36,18 +50,20 @@ class AuditChain:
     def __init__(self, policy_hash: str) -> None:
         self.policy_hash = policy_hash
         self.rows: List[Row] = []
+        self._lock = threading.Lock()
 
     @property
     def head(self) -> str:
         return self.rows[-1].hash if self.rows else GENESIS
 
     def _append(self, kind: str, record: dict) -> Row:
-        record = dict(record)
-        record["kind"] = kind
-        record["policy_hash"] = self.policy_hash
-        row = Row(kind, record, self.head, _h(self.head, record))
-        self.rows.append(row)
-        return row
+        with self._lock:
+            record = dict(record)
+            record["kind"] = kind
+            record["policy_hash"] = self.policy_hash
+            row = Row(kind, record, self.head, _h(self.head, record))
+            self.rows.append(row)
+            return row
 
     def commit_proposal(self, proposal: dict) -> str:
         """Called BEFORE submission. The returned hash goes into the payment memo."""

@@ -1,19 +1,19 @@
 """PolicyService: holds the policy key, builds every transaction, countersigns, submits. Contains no model."""
 from __future__ import annotations
 
-import re
 import threading
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Dict, List, Optional, Set
 
+from xrpl.core.addresscodec import is_valid_classic_address
 from xrpl.core.binarycodec import encode_for_multisigning
-from xrpl.core.keypairs import is_valid_message
+from xrpl.core.keypairs import derive_classic_address, is_valid_message
 from xrpl.models.transactions import Payment
 from xrpl.transaction import multisign, sign
 from xrpl.wallet import Wallet
 
-from ..audit import AuditChain
+from ..audit import AuditChain, public_text
 from ..budget import Budget, BudgetError
 from ..config import Policy, VendorRecord, drops_to_xrp, xrp_to_drops
 from .builder import build_payment, same_transaction, strip_signatures
@@ -22,13 +22,10 @@ from .rules import Evaluation, Intent, evaluate
 
 MULTISIGN_FEE_DROPS = 36        # base fee x (1 + 2 signers), rounded up
 LAST_LEDGER_WINDOW = 40
-# ed25519 seeds start with sEd; the private key is 66 hex chars starting with ED
-_SECRET = re.compile(r"sEd[1-9A-HJ-NP-Za-km-z]{28}|ED[0-9A-Fa-f]{64}")
 
 
-def public_text(text: str) -> str:
-    """Exception and ledger messages are returned over HTTP and written to the audit log."""
-    return _SECRET.sub("[redacted]", text)
+class AdminError(Exception):
+    pass
 
 
 @dataclass
@@ -95,57 +92,79 @@ class PolicyService:
             self.audit.refused(intent.public(), failed)
             return self._done(intent, Outcome("refused", intent.public(), rules, failed, message="Refused at reservation time."))
 
-        with self._submit_lock:                      # sequence assignment through submission, one at a time
-            self.in_flight.add(intent.invoice_id)
-            try:
-                sequence = self.ledger.next_sequence(self.treasury)
-                lls = self.ledger.current_ledger_index() + LAST_LEDGER_WINDOW
-                proposal = {"intent": intent.public(), "destination": vendor.address, "amount_drops": xrp_to_drops(amount),
-                            "sequence": sequence, "rules": rules}
-                commitment = self.audit.commit_proposal(proposal)
-                built = build_payment(treasury=self.treasury, desk=self.desk, vendor=vendor, amount_xrp=amount,
-                                      invoice_id=intent.invoice_id, commitment=commitment, policy_hash=self.policy.hash(),
-                                      fee_drops=MULTISIGN_FEE_DROPS, sequence=sequence, last_ledger_sequence=lls)
-
-                # 1. the agent's signature, over exactly this transaction
+        settled = False
+        held = False
+        try:
+            with self._submit_lock:                      # sequence assignment through submission, one at a time
+                if intent.invoice_id in self.paid_invoices:
+                    failed = ["invoice matches an open purchase order and is unpaid: already paid or in flight"]
+                    self.audit.refused(intent.public(), failed)
+                    return self._done(intent, Outcome("refused", intent.public(), rules, failed,
+                                                      message="No signature exists; nothing to submit."))
+                self.in_flight.add(intent.invoice_id)
                 try:
-                    agent_signed = self.daemon.sign(built, intent.nonce)
-                except Exception as e:
-                    self.budget.release(reservation)
-                    failed = [public_text(str(e))]
-                    self.audit.refused(intent.public(), failed, {"commitment": commitment})
-                    return self._done(intent, Outcome("refused", intent.public(), rules, failed, commitment=commitment,
-                                                      message="The signer daemon would not sign."))
-                same, why = same_transaction(built, agent_signed)
-                if not same or not self._agent_signature_valid(agent_signed):
-                    self.budget.release(reservation)
-                    failed = [f"returned transaction is not the one built: {why}"]
-                    self.audit.refused(intent.public(), failed, {"commitment": commitment})
-                    return self._done(intent, Outcome("refused", intent.public(), rules, failed, commitment=commitment))
+                    sequence = self.ledger.next_sequence(self.treasury)
+                    lls = self.ledger.current_ledger_index() + LAST_LEDGER_WINDOW
+                    proposal = {"intent": intent.public(), "destination": vendor.address, "amount_drops": xrp_to_drops(amount),
+                                "sequence": sequence, "rules": rules}
+                    commitment = self.audit.commit_proposal(proposal)
+                    built = build_payment(treasury=self.treasury, desk=self.desk, vendor=vendor, amount_xrp=amount,
+                                          invoice_id=intent.invoice_id, commitment=commitment, policy_hash=self.policy.hash(),
+                                          fee_drops=MULTISIGN_FEE_DROPS, sequence=sequence, last_ledger_sequence=lls)
 
-                # 2. our signature, then submit
-                base = Payment.from_xrpl(built)
-                policy_signed = sign(base, self._wallet, multisign=True)
-                combined = multisign(base, [Payment.from_xrpl(agent_signed), policy_signed]).to_xrpl()
-                result = self.ledger.submit(combined)
-                self.audit.append_result(commitment, result.hash, result.engine_result, result.message)
+                    # 1. the agent's signature, over exactly this transaction
+                    try:
+                        agent_signed = self.daemon.sign(built, intent.nonce)
+                    except Exception as e:
+                        failed = [public_text(str(e))]
+                        self.audit.refused(intent.public(), failed, {"commitment": commitment})
+                        return self._done(intent, Outcome("refused", intent.public(), rules, failed, commitment=commitment,
+                                                          message="The signer daemon would not sign."))
+                    same, why = same_transaction(built, agent_signed)
+                    if not same:
+                        failed = [f"returned transaction is not the one built: {why}"]
+                        self.audit.refused(intent.public(), failed, {"commitment": commitment})
+                        return self._done(intent, Outcome("refused", intent.public(), rules, failed, commitment=commitment))
+                    if not self._agent_signature_valid(agent_signed):
+                        failed = ["agent signature is not valid for the agent key"]
+                        self.audit.refused(intent.public(), failed, {"commitment": commitment})
+                        return self._done(intent, Outcome("refused", intent.public(), rules, failed, commitment=commitment))
 
-                if result.ok:
-                    self.budget.settle(reservation)
-                    self.paid_invoices.add(intent.invoice_id)
-                    self.memos_by_tx_hash[result.hash] = commitment
-                    self.daemon.settle(intent.nonce)
-                    return self._done(intent, Outcome("paid", intent.public(), rules, tx_hash=result.hash, engine_result=result.engine_result,
-                                                      commitment=commitment, message=f"Validated. {vendor.name} paid {amount} XRP."))
+                    # 2. our signature, then submit
+                    base = Payment.from_xrpl(built)
+                    policy_signed = sign(base, self._wallet, multisign=True)
+                    combined = multisign(base, [Payment.from_xrpl(agent_signed), policy_signed]).to_xrpl()
+                    try:
+                        result = self.ledger.submit(combined)
+                    except Exception:
+                        self.audit.note("submit raised; reservation held", {"commitment": commitment})
+                        held = True
+                        raise
+                    self.audit.append_result(commitment, result.hash, result.engine_result, public_text(result.message))
+
+                    if result.ok:
+                        self.paid_invoices.add(intent.invoice_id)
+                        self.budget.settle(reservation)
+                        settled = True
+                        self.memos_by_tx_hash[result.hash] = commitment
+                        self.daemon.settle(intent.nonce)
+                        return self._done(intent, Outcome("paid", intent.public(), rules, tx_hash=result.hash, engine_result=result.engine_result,
+                                                          commitment=commitment, message=f"Validated. {vendor.name} paid {amount} XRP."))
+                    return self._done(intent, Outcome("rejected_by_ledger", intent.public(), rules, [f"ledger: {result.engine_result}"],
+                                                      tx_hash=result.hash, engine_result=result.engine_result, commitment=commitment,
+                                                      message=f"Both signatures were valid; the ledger said {result.engine_result}. {public_text(result.message)}"))
+                finally:
+                    self.in_flight.discard(intent.invoice_id)
+        finally:
+            if not settled and not held:
                 self.budget.release(reservation)
-                return self._done(intent, Outcome("rejected_by_ledger", intent.public(), rules, [f"ledger: {result.engine_result}"],
-                                                  tx_hash=result.hash, engine_result=result.engine_result, commitment=commitment,
-                                                  message=f"Both signatures were valid; the ledger said {result.engine_result}. {public_text(result.message)}"))
-            finally:
-                self.in_flight.discard(intent.invoice_id)
 
     # ----- admin path (logged, human-only) -----
     def admin_add_vendor(self, name: str, address: str, jurisdiction: str, actor: str = "human") -> List[Outcome]:
+        if name in self.policy.allowlist:
+            raise AdminError("vendor already listed; adding a vendor never replaces a record")
+        if not is_valid_classic_address(address):
+            raise AdminError(f"invalid classic address: {address}")
         self.policy.allowlist[name] = VendorRecord(name, address, jurisdiction)
         self.audit.admin("add_vendor", {"actor": actor, "vendor": name, "address": address, "jurisdiction": jurisdiction,
                                          "new_policy_hash": self.policy.hash()})
@@ -163,6 +182,8 @@ class PolicyService:
             return False
         s = signers[0]["Signer"]
         if s["Account"] != self.daemon.address:
+            return False
+        if derive_classic_address(s["SigningPubKey"]) != self.daemon.address:
             return False
         payload = encode_for_multisigning(strip_signatures(agent_signed), s["Account"])
         return is_valid_message(bytes.fromhex(payload), bytes.fromhex(s["TxnSignature"]), s["SigningPubKey"])
