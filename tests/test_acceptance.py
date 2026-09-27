@@ -14,23 +14,41 @@ from fuse.ledger.local import LocalLedger
 from fuse.policy.builder import build_payment, decode_memo_commitment, invoice_id_hash
 from fuse.policy.rules import Intent, evaluate
 from fuse.policy.service import MULTISIGN_FEE_DROPS, PolicyService
+from fuse.registry import accept, issue, setup_local_registry
 from fuse.setup import KeyRing, revoke_delegation, run_setup
 from fuse.signer.daemon import Refusal, SignerDaemon
+from fastapi.testclient import TestClient
+from fuse.policy.api import DaemonClient, create_app
+from fuse.signer.api import create_app as create_signer_app
 
 
 # ---------- fixtures ----------
-@pytest.fixture
-def world():
+@pytest.fixture(params=["direct", "http", "two-apps"])
+def world(request):
     policy = default_policy()
     ledger = LocalLedger()
     ring = KeyRing.local(ledger, policy)
     run_setup(ledger, ring, delegation=True)
+    registry = setup_local_registry(ledger, [*ring.vendors.values(), ring.northwind])
     audit = AuditChain(policy.hash())
-    service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit)
+    service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit,
+                            registry.classic_address)
     daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
-                          {n: v.address for n, v in policy.allowlist.items()}, policy.fee_cap_drops, forward=service.handle_intent)
+                          {name: w.classic_address for name, w in ring.vendors.items()}, policy.fee_cap_drops, forward=service.handle_intent)
     service.attach_daemon(daemon)
-    return dict(policy=policy, ledger=ledger, ring=ring, audit=audit, service=service, daemon=daemon)
+    if request.param in ("http", "two-apps"):
+        client = TestClient(create_app(service))
+
+        def forward(intent):
+            response = client.post("/intent", json=intent.public())
+            response.raise_for_status()
+        daemon._forward = forward
+    if request.param == "two-apps":
+        # policy reaches the daemon only through its HTTP app; the daemon object stays in the world for assertions
+        signer_client = TestClient(create_signer_app(daemon))
+        service.attach_daemon(DaemonClient("", ring.agent.classic_address, signer_client))
+
+    return dict(policy=policy, ledger=ledger, ring=ring, audit=audit, service=service, daemon=daemon, registry=registry)
 
 
 def run_intent(w, **kw):
@@ -90,6 +108,7 @@ def test_ac06_duplicate_invoice_refused(world):
 def test_ac07_unknown_vendor_parked_then_rerun(world):
     o = run_intent(world, vendor="Northwind Freight", amount="6.40", invoice_id="INV-5510")
     assert o.status == "parked"
+    world["daemon"].add_vendor("Northwind Freight", world["ring"].northwind.classic_address)
     reruns = world["service"].admin_add_vendor("Northwind Freight", world["ring"].northwind.classic_address, "US")
     assert len(reruns) == 1 and reruns[0].status == "paid"
     assert any(r.kind == "admin" for r in world["audit"].rows)
@@ -142,6 +161,23 @@ def test_ac08_unknown_and_settled_nonce_refused(world):
     world["daemon"].settle(nonce)
     with pytest.raises(Refusal):
         world["daemon"].sign(tx, nonce)
+
+
+def test_policy_vendor_swap_refused_by_daemon(world):
+    world["daemon"].add_vendor("Northwind Freight", world["ring"].northwind.classic_address)
+    o = run_intent(world, vendor="Northwind Freight", amount="6.40", invoice_id="INV-5510")
+    assert o.status == "parked"
+    # worst case for the policy side: the registry is compromised too, so the attacker holds an accepted credential
+    attacker = world["ring"].attacker
+    assert issue(world["ledger"], world["registry"], attacker.classic_address).ok
+    assert accept(world["ledger"], attacker, world["registry"].classic_address).ok
+    before = len(world["ledger"].history)
+    attacker_before = world["ledger"].balance_xrp(attacker.classic_address)
+    reruns = world["service"].admin_add_vendor("Northwind Freight", attacker.classic_address, "US")
+    assert len(reruns) == 1 and reruns[0].status == "refused"
+    assert any("Destination does not match my record" in f for f in reruns[0].failed)
+    assert len(world["ledger"].history) == before
+    assert world["ledger"].balance_xrp(world["ring"].attacker.classic_address) == attacker_before
 
 
 # ---------- AC9: a non-Payment from the desk on the treasury is rejected by the ledger ----------

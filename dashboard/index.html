@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fuse Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme:light;
+  --bg:#F3F5F7; --surface:#FFFFFF; --surface-2:#EAEEF2; --ink:#101820; --muted:#5B6B7A; --line:#CBD3DB;
+  --accent:#C77800; --accent-ink:#7A4A00; --accent-soft:#FFF1D6;
+  --pass:#1E7A4E; --pass-soft:#DFF3E7; --trip:#BF2F26; --trip-soft:#FBE3E1; --wait:#4A5D9B; --wait-soft:#E3E8F7;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ color-scheme:dark;
+    --bg:#0E141A; --surface:#151D25; --surface-2:#1D2731; --ink:#E7EDF2; --muted:#98A6B3; --line:#2C3843;
+    --accent:#F0A526; --accent-ink:#FFD48A; --accent-soft:#3A2A0E;
+    --pass:#4CC38A; --pass-soft:#12301F; --trip:#F26B62; --trip-soft:#3A1614; --wait:#8EA3E8; --wait-soft:#1C2440; }
+}
+:root[data-theme="dark"]{ color-scheme:dark;
+  --bg:#0E141A; --surface:#151D25; --surface-2:#1D2731; --ink:#E7EDF2; --muted:#98A6B3; --line:#2C3843;
+  --accent:#F0A526; --accent-ink:#FFD48A; --accent-soft:#3A2A0E;
+  --pass:#4CC38A; --pass-soft:#12301F; --trip:#F26B62; --trip-soft:#3A1614; --wait:#8EA3E8; --wait-soft:#1C2440; }
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1360px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:28px;margin:0;letter-spacing:-0.02em;line-height:1.1}
+h2{font-size:15px;margin:0;font-weight:600}
+p{margin:0}
+a{color:inherit;text-underline-offset:2px}
+.mono{font-family:var(--mono);font-size:12.5px}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+button,input{font:inherit;font-size:14px;color:var(--ink)}
+button{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer}
+button:hover{border-color:var(--muted)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:100%;min-width:0}
+
+.top{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between}
+.brand p{margin-top:4px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:2px 10px;font-size:12.5px;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.dot.live{background:var(--pass)} .dot.down{background:var(--trip)}
+.kill{display:flex;flex-direction:column;align-items:flex-end;gap:6px;max-width:320px}
+.kill button{background:var(--trip);border-color:var(--trip);color:#fff;font-weight:600;padding:10px 18px}
+.kill button:hover{filter:brightness(1.08)}
+.kill .small{text-align:right}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:18px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}
+.stat .label{font-size:12.5px;color:var(--muted)}
+.stat .value{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px;overflow-wrap:anywhere}
+.stat .sub{font-size:12px;color:var(--muted);margin-top:2px}
+.counts{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:13px}
+
+.banner{margin-top:14px;border-radius:10px;padding:10px 14px;border:1px solid var(--line);background:var(--surface-2)}
+.banner.bad{background:var(--trip-soft);border-color:var(--trip);color:var(--ink)}
+.banner.good{background:var(--pass-soft);border-color:var(--pass)}
+.hidden{display:none}
+
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:16px;margin-top:18px;align-items:start}
+@media (max-width:1000px){.layout{grid-template-columns:minmax(0,1fr)}}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px;min-width:0}
+.panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.title{position:relative;display:flex;align-items:center;gap:8px}
+.info{display:inline-grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--muted)}
+.info:hover,.info[aria-expanded="true"]{color:var(--ink);background:var(--surface-2)}
+.info svg{width:16px;height:16px}
+.info-pop{position:absolute;top:calc(100% + 8px);left:0;z-index:20;width:min(320px,calc(100vw - 48px));background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 38px 12px 14px;box-shadow:0 12px 32px rgba(0,0,0,.22);font-size:13.5px;line-height:1.5;color:var(--ink);font-weight:400;
+  opacity:0;visibility:hidden;transform:translateY(-6px) scale(.97);transform-origin:top left;transition:opacity .18s ease,transform .18s ease,visibility 0s linear .18s}
+.info-pop.open{opacity:1;visibility:visible;transform:none;transition:opacity .18s ease,transform .18s ease,visibility 0s}
+.info-close{position:absolute;top:6px;right:6px;width:26px;height:26px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:20px;line-height:1}
+.info-close:hover{color:var(--ink);background:var(--surface-2)}
+@media (prefers-reduced-motion: reduce){.info-pop,.info-pop.open{transition:none}}
+
+.inv{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--surface)}
+.inv + .inv{margin-top:10px}
+.inv.refused,.inv.rejected_by_ledger{border-left:4px solid var(--trip)}
+.inv.paid{border-left:4px solid var(--pass)}
+.inv.parked{border-left:4px solid var(--wait)}
+.inv-head{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.inv-id{font-family:var(--mono);font-weight:500}
+.inv-amt{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:600}
+.status{font-size:12px;font-weight:600;letter-spacing:.03em;border-radius:6px;padding:2px 8px;white-space:nowrap}
+.status.paid{background:var(--pass-soft);color:var(--pass)}
+.status.refused,.status.rejected_by_ledger{background:var(--trip-soft);color:var(--trip)}
+.status.parked{background:var(--wait-soft);color:var(--wait)}
+.reason{margin-top:6px;font-size:13.5px;color:var(--muted)}
+.reason b{color:var(--ink);font-weight:500}
+.fails{margin:8px 0 0;padding:0;list-style:none;font-size:13.5px}
+.fails li{display:flex;gap:8px}
+.fails li::before{content:"\2715";color:var(--trip);font-weight:600}
+.note{margin-top:8px;font-size:13.5px}
+.poison{margin-top:10px;border:1px dashed var(--accent);background:var(--accent-soft);border-radius:10px;padding:10px 12px}
+.poison .label{font-size:12px;font-weight:600;color:var(--accent-ink);letter-spacing:.03em}
+.poison pre{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono);font-size:12.5px}
+details{margin-top:8px}
+summary{cursor:pointer;font-size:13px;color:var(--muted)}
+.rules{margin:6px 0 0;padding:0;list-style:none;font-size:13px}
+.rules li{display:grid;grid-template-columns:18px 1fr;gap:4px}
+.ok{color:var(--pass)} .no{color:var(--trip)} .soft{color:var(--wait)}
+.empty{color:var(--muted);font-size:14px;padding:8px 0}
+
+.table-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+#ledger-table{min-width:600px}
+th{text-align:left;font-weight:500;color:var(--muted);font-size:12.5px;border-bottom:1px solid var(--line);padding:6px 8px}
+td{border-bottom:1px solid var(--line);padding:7px 8px;vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600}
+td.num.zero{color:var(--pass)}
+.code{font-family:var(--mono);font-size:12px;border-radius:5px;padding:1px 6px;white-space:nowrap}
+.code.tes{background:var(--pass-soft);color:var(--pass)}
+.code.tec,.code.rej{background:var(--trip-soft);color:var(--trip)}
+.tag{font-size:12px;white-space:nowrap}
+.tag.logged{color:var(--pass)} .tag.unlogged{color:var(--trip);font-weight:600}
+
+.findings{margin:10px 0 0;padding:0;list-style:none}
+.findings li{background:var(--trip-soft);border-radius:8px;padding:8px 10px;font-size:13.5px}
+.findings li + li{margin-top:6px}
+.clean{color:var(--pass);font-size:13.5px;margin-top:10px}
+.facts{font-size:13px}
+.facts .acct{margin-top:8px}
+.facts .acct b{font-weight:600}
+.big{font-size:30px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
+.flag{border:1px solid var(--trip);background:var(--trip-soft);border-radius:10px;padding:10px 12px;margin-top:10px;font-size:13.5px}
+
+form .field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+form label{font-size:12.5px;color:var(--muted)}
+form .row{display:grid;grid-template-columns:1fr 90px;gap:10px}
+.foot{margin-top:24px;font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>Fuse</h1>
+      <p class="muted">An AI agent pays invoices on the XRP Ledger. It can propose all day and never sign alone.</p>
+      <div class="chips">
+        <span class="chip"><span class="dot" id="live-dot"></span><span id="live-text">connecting</span></span>
+        <span class="chip" id="network-chip">network: …</span>
+        <span class="chip mono" id="policy-chip">policy …</span>
+      </div>
+    </div>
+    <div class="kill">
+      <button id="kill-btn" type="button" disabled>Kill switch</button>
+      <p class="small muted" id="kill-note">Submits the pre-signed break-glass file. No key is used.</p>
+    </div>
+  </header>
+
+  <div class="banner hidden" id="banner" role="status"></div>
+
+  <section class="stats" aria-label="Balances and totals">
+    <div class="stat"><div class="label">Paying account (the float)</div><div class="value" id="bal-spend">…</div><div class="sub mono" id="addr-spend"></div></div>
+    <div class="stat"><div class="label">Desk (pays fees only)</div><div class="value" id="bal-desk">…</div><div class="sub mono" id="addr-desk"></div></div>
+    <div class="stat"><div class="label">Treasury</div><div class="value" id="bal-treasury">…</div><div class="sub mono" id="addr-treasury"></div></div>
+    <div class="stat"><div class="label">Invoices</div><div class="value" id="count-total">0</div><div class="counts" id="counts"></div></div>
+  </section>
+
+  <div class="layout">
+    <div class="col">
+      <section class="panel" aria-labelledby="inv-title">
+        <div class="panel-head"><div class="title"><h2 id="inv-title">Invoices and decisions</h2><button class="info" type="button" aria-label="What invoices and decisions shows" aria-expanded="false" aria-controls="inv-info"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 7.2v4.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.8" r="0.95" fill="currentColor"/></svg></button><div class="info-pop" id="inv-info" role="dialog" aria-labelledby="inv-title"><button class="info-close" type="button" aria-label="Close">&times;</button><p>Every invoice the agent read, and what the policy service decided: paid, refused with the rules that failed, parked until a human adds the vendor, or rejected by the ledger. A poisoned invoice also shows the hidden text that fooled the reader.</p></div></div><span class="small muted">newest first</span></div>
+        <div id="invoices"><p class="empty">No invoices yet.</p></div>
+      </section>
+
+      <section class="panel" aria-labelledby="led-title">
+        <div class="panel-head"><div class="title"><h2 id="led-title">Ledger activity</h2><button class="info" type="button" aria-label="What ledger activity shows" aria-expanded="false" aria-controls="led-info"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 7.2v4.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.8" r="0.95" fill="currentColor"/></svg></button><div class="info-pop" id="led-info" role="dialog" aria-labelledby="led-title"><button class="info-close" type="button" aria-label="Close">&times;</button><p>Every transaction sent to the XRP Ledger, including attacks that went around the policy service. Rejections that never entered a ledger have no transaction link. “Not in log” marks a successful payment our audit log never saw.</p></div></div><span class="small muted">every transaction submitted, including attacks</span></div>
+        <div class="table-wrap"><table id="ledger-table">
+          <thead><tr><th>Result</th><th>Type</th><th>To</th><th>Amount</th><th>Audit log</th><th>Tx</th></tr></thead>
+          <tbody id="ledger"><tr><td colspan="6" class="empty">Nothing submitted yet.</td></tr></tbody>
+        </table></div>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="panel" aria-labelledby="blast-title">
+        <div class="panel-head"><div class="title"><h2 id="blast-title">Blast radius</h2><button class="info" type="button" aria-label="What blast radius shows" aria-expanded="false" aria-controls="blast-info"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 7.2v4.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.8" r="0.95" fill="currentColor"/></svg></button><div class="info-pop" id="blast-info" role="dialog" aria-labelledby="blast-title"><button class="info-close" type="button" aria-label="Close">&times;</button><p>The most money that could be lost if each part were stolen or fooled, worked out from the live account settings. A setup mistake, such as an extra delegate, a backdoor key or a lower signature quorum, shows up as a finding and raises the numbers.</p></div></div><span class="small muted">worst case per stolen part</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>If this is compromised</th><th style="text-align:right">Max loss</th></tr></thead>
+          <tbody id="blast-rows"><tr><td colspan="2" class="empty">Loading…</td></tr></tbody>
+        </table></div>
+        <div id="findings"></div>
+        <details><summary>Checks read from the ledger</summary><div class="facts" id="facts"></div></details>
+      </section>
+
+      <section class="panel" aria-labelledby="audit-title">
+        <div class="panel-head"><div class="title"><h2 id="audit-title">Audit completeness</h2><button class="info" type="button" aria-label="What audit completeness shows" aria-expanded="false" aria-controls="audit-info"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 7.2v4.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.8" r="0.95" fill="currentColor"/></svg></button><div class="info-pop" id="audit-info" role="dialog" aria-labelledby="audit-title"><button class="info-close" type="button" aria-label="Close">&times;</button><p>Compares the payments that actually left the paying account on the ledger with our audit log. A payment the log never saw went around the policy service, for example with stolen keys.</p></div></div><span class="small muted">ledger vs. our log</span></div>
+        <div id="audit"><p class="empty">Loading…</p></div>
+      </section>
+
+      <section class="panel" aria-labelledby="vendor-title">
+        <div class="panel-head"><div class="title"><h2 id="vendor-title">Add vendor</h2><button class="info" type="button" aria-label="What add vendor shows" aria-expanded="false" aria-controls="vendor-info"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 7.2v4.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.8" r="0.95" fill="currentColor"/></svg></button><div class="info-pop" id="vendor-info" role="dialog" aria-labelledby="vendor-title"><button class="info-close" type="button" aria-label="Close">&times;</button><p>The logged admin path for approving a new vendor. The address must come from a trusted source, never from an invoice. Invoices parked for that vendor rerun automatically.</p></div></div><span class="small muted">logged admin path</span></div>
+        <form id="vendor-form">
+          <div class="field"><label for="v-name">Name (as on the invoice)</label><input id="v-name" required autocomplete="off"></div>
+          <div class="field"><label for="v-addr">XRPL address</label><input id="v-addr" class="mono" required autocomplete="off" spellcheck="false"></div>
+          <div class="row">
+            <div class="field"><label for="v-actor">Added by</label><input id="v-actor" value="admin" autocomplete="off"></div>
+            <div class="field"><label for="v-jur">Country</label><input id="v-jur" value="US" maxlength="2" required autocomplete="off"></div>
+          </div>
+          <button type="submit">Add and rerun parked invoices</button>
+        </form>
+      </section>
+    </div>
+  </div>
+
+  <p class="foot">This page holds no keys. It reads the policy service and the ledger, and its two buttons call the logged admin path and submit a file that was signed in advance.</p>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { status: null, reports: null, invoices: [] };
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function xrp(drops) {
+  const n = Number(drops) / 1e6;
+  return n.toLocaleString("en-US", { maximumFractionDigits: 6 }) + " XRP";
+}
+function short(a) { return a ? a.slice(0, 6) + "…" + a.slice(-4) : "—"; }
+function txLink(hash) {
+  if (!hash) return '<span class="muted">none</span>';
+  const ex = state.reports && state.reports.explorer;
+  return ex ? `<a class="mono" href="${esc(ex)}/transactions/${esc(hash)}" target="_blank" rel="noopener">${esc(short(hash))}</a>`
+            : `<span class="mono" title="${esc(hash)}">${esc(short(hash))}</span>`;
+}
+function codeClass(code) {
+  if (!code) return "rej";
+  if (code.startsWith("tes")) return "tes";
+  if (code.startsWith("tec")) return "tec";
+  return "rej";
+}
+function codeNote(code) {
+  if (!code || code.startsWith("tes")) return "";
+  if (code.startsWith("tec")) return "failed, fee charged";
+  return "rejected, never entered a ledger";
+}
+
+function names() {
+  const map = {};
+  const acc = state.reports && state.reports.blast && state.reports.blast.accounts;
+  if (acc) { map[acc.spend.address] = "paying account"; map[acc.desk.address] = "desk"; map[acc.treasury.address] = "treasury"; }
+  for (const row of (state.status ? state.status.audit : [])) {
+    if (row.kind === "proposal" && row.destination && row.intent) map[row.destination] = row.intent.vendor;
+    if (row.kind === "admin" && row.address) map[row.address] = row.vendor;
+  }
+  for (const o of (state.status ? state.status.outcomes : [])) {
+    const c = o.intent.claimed_destination;
+    if (c && !map[c]) map[c] = "account named in a poisoned invoice";
+  }
+  return map;
+}
+function who(addr, map) {
+  if (!addr) return '<span class="muted">—</span>';
+  return map[addr] ? `${esc(map[addr])} <span class="mono muted">${esc(short(addr))}</span>` : `<span class="mono">${esc(short(addr))}</span>`;
+}
+
+function renderStatus() {
+  const s = state.status;
+  $("policy-chip").textContent = "policy " + s.policy_hash.slice(0, 10);
+  const outcomes = s.outcomes.slice().reverse();
+  const open = new Set([...document.querySelectorAll("#invoices details[open]")].map((d) => d.dataset.key));
+  const counts = { paid: 0, refused: 0, parked: 0, rejected_by_ledger: 0 };
+  for (const o of s.outcomes) counts[o.status] = (counts[o.status] || 0) + 1;
+  $("count-total").textContent = s.outcomes.length;
+  $("counts").innerHTML = [["paid", "paid", "ok"], ["refused", "refused", "no"], ["parked", "parked", "soft"], ["rejected_by_ledger", "rejected by ledger", "no"]]
+    .filter(([k]) => counts[k]).map(([k, label, cls]) => `<span class="${cls}">${counts[k]} ${label}</span>`).join("");
+
+  const label = { paid: "PAID", refused: "REFUSED", parked: "PARKED", rejected_by_ledger: "REJECTED BY LEDGER" };
+  $("invoices").innerHTML = outcomes.length ? outcomes.map((o) => {
+    const it = o.intent;
+    const inv = it.claimed_destination ? state.invoices.find((i) => i.invoice_id === it.invoice_id && i.hidden) : null;
+    const rules = o.rules.map((r) => {
+      const mark = r.ok ? '<span class="ok">&#10003;</span>' : r.soft ? '<span class="soft">!</span>' : '<span class="no">&#10005;</span>';
+      return `<li>${mark}<span>${esc(r.rule)}${r.note ? ` <span class="muted">(${esc(r.note)})</span>` : ""}</span></li>`;
+    }).join("");
+    return `<article class="inv ${esc(o.status)}">
+      <div class="inv-head">
+        <span class="inv-id">${esc(it.invoice_id)}</span><span>${esc(it.vendor)}</span>
+        <span class="status ${esc(o.status)}">${label[o.status] || esc(o.status)}</span>
+        <span class="inv-amt">${esc(it.amount)} XRP</span>
+      </div>
+      <p class="reason"><b>Reader:</b> ${esc(it.reason)}</p>
+      ${it.claimed_destination ? `<p class="reason"><b>Invoice asks to pay:</b> <span class="mono">${esc(it.claimed_destination)}</span></p>` : ""}
+      ${inv ? `<div class="poison"><div class="label">HIDDEN TEXT IN THE INVOICE</div><pre>${esc(inv.hidden)}</pre></div>` : ""}
+      ${o.failed.length ? `<ul class="fails">${o.failed.map((f) => `<li><span>${esc(f)}</span></li>`).join("")}</ul>` : ""}
+      ${o.status === "paid" ? `<p class="note">Paid on the ledger: ${txLink(o.tx_hash)} <span class="code tes">${esc(o.engine_result)}</span></p>` : ""}
+      ${o.status === "rejected_by_ledger" ? `<p class="note">Both signatures were valid; the ledger said <span class="code rej">${esc(o.engine_result)}</span></p>` : ""}
+      ${o.status !== "paid" && o.message ? `<p class="note muted">${esc(o.message)}</p>` : ""}
+      ${rules ? `<details data-key="${esc(it.nonce)}"${open.has(it.nonce) ? " open" : ""}><summary>Rules checked (${o.rules.length})</summary><ul class="rules">${rules}</ul></details>` : ""}
+    </article>`;
+  }).join("") : '<p class="empty">No invoices yet.</p>';
+
+  const map = names();
+  const logged = new Set(s.audit.filter((r) => r.kind === "result").map((r) => r.tx_hash));
+  const rows = s.history.slice().reverse();
+  $("ledger").innerHTML = rows.length ? rows.map((h) => {
+    const payment = h.type === "Payment";
+    const amount = payment && typeof h.amount === "string" ? xrp(h.amount) : "";
+    let audit = '<span class="muted">—</span>';
+    if (payment && h.result === "tesSUCCESS") audit = logged.has(h.hash) ? '<span class="tag logged">logged</span>' : '<span class="tag unlogged">not in log</span>';
+    const note = codeNote(h.result);
+    return `<tr>
+      <td><span class="code ${codeClass(h.result)}">${esc(h.result)}</span>${note ? `<div class="small muted">${note}</div>` : ""}</td>
+      <td>${esc(h.type)}</td><td>${payment ? who(h.destination, map) : '<span class="muted">—</span>'}</td>
+      <td class="num">${amount}</td><td>${audit}</td>
+      <td>${/^t(ef|em|el|er)/.test(h.result || "") ? '<span class="muted">none</span>' : txLink(h.hash)}</td>
+    </tr>`;
+  }).join("") : '<tr><td colspan="6" class="empty">Nothing submitted yet.</td></tr>';
+}
+
+function renderReports() {
+  const r = state.reports;
+  if (r.error) {
+    $("blast-rows").innerHTML = `<tr><td colspan="2" class="empty">Could not read the ledger: ${esc(r.error)}</td></tr>`;
+    return;
+  }
+  $("network-chip").textContent = "network: " + r.network;
+  const acc = r.blast.accounts;
+  for (const k of ["spend", "desk", "treasury"]) {
+    $("bal-" + k).textContent = xrp(acc[k].balance_drops);
+    $("addr-" + k).textContent = k === "treasury" && acc.treasury.address === acc.spend.address ? "same account as the paying account" : short(acc[k].address);
+  }
+  const kill = $("kill-btn");
+  kill.disabled = !r.break_glass_file;
+  $("kill-note").textContent = r.break_glass_file ? "Submits the pre-signed break-glass file. No key is used."
+                                                  : "No break-glass file yet (break-glass/revoke.json).";
+
+  const labels = { "reader": "Reader (fooled by an invoice)", "agent key": "Agent key", "policy key": "Policy key",
+                   "agent+policy keys": "Both keys", "spend account key": "Paying account key", "treasury key": "Treasury key" };
+  $("blast-rows").innerHTML = r.blast.rows.map((row) => `<tr>
+      <td>${esc(labels[row.part] || row.part)}<div class="small muted">${esc(row.why)}</div></td>
+      <td class="num ${row.max_loss_drops === 0 ? "zero" : ""}">${xrp(row.max_loss_drops)}</td></tr>`).join("");
+  $("findings").innerHTML = r.blast.findings.length
+    ? `<ul class="findings">${r.blast.findings.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>`
+    : '<p class="clean">&#10003; No setup findings: the two-key argument holds.</p>';
+
+  $("facts").innerHTML = ["spend", "desk", "treasury"].map((k) => {
+    const a = acc[k];
+    const title = { spend: "Paying account", desk: "Desk", treasury: "Treasury" }[k];
+    const signers = Object.entries(a.signers || {});
+    const dels = Object.entries(a.delegations || {});
+    return `<div class="acct"><b>${title}</b> <span class="mono muted">${esc(a.address)}</span>
+      <div>master key ${a.master_disabled ? "disabled" : "enabled"} · regular key ${a.regular_key ? esc(a.regular_key) : "none"}</div>
+      <div>signer list ${signers.length ? `quorum ${a.quorum} of ${signers.map(([s, w]) => `${esc(short(s))} (w${w})`).join(", ")}` : "none"}</div>
+      <div>delegates ${dels.length ? dels.map(([d, p]) => `${esc(short(d))}: ${esc(p.join(", ") || "nothing")}`).join("; ") : "none"}</div></div>`;
+  }).join("");
+
+  const a = r.audit;
+  const map = names();
+  $("audit").innerHTML = `<p><span class="big">${a.outgoing - a.unlogged.length} of ${a.outgoing}</span></p>
+    <p class="small muted">successful payments out of the paying account have a matching audit log entry</p>
+    ${a.unlogged.length ? `<div class="flag"><b>${a.unlogged.length} payment${a.unlogged.length > 1 ? "s" : ""} the log never saw.</b> These went around the policy service.
+      ${a.unlogged.map((t) => `<div style="margin-top:6px">${esc(t.amount)} to ${who(t.destination, map)} · ${txLink(t.hash)}</div>`).join("")}</div>`
+      : '<p class="clean">&#10003; Every payment that left the paying account is in the log.</p>'}`;
+}
+
+function setLive(ok, text) {
+  $("live-dot").className = "dot " + (ok ? "live" : "down");
+  $("live-text").textContent = text;
+}
+function banner(text, kind) {
+  const b = $("banner");
+  b.className = "banner " + (kind || "");
+  b.textContent = text;
+}
+
+async function getJSON(path) {
+  const res = await fetch(path, { cache: "no-store" });
+  if (!res.ok) throw new Error(path + ": HTTP " + res.status);
+  return res.json();
+}
+async function refreshStatus() {
+  try {
+    const next = await getJSON("/status");
+    const changed = JSON.stringify(next) !== JSON.stringify(state.status);
+    state.status = next;
+    if (changed) renderStatus();
+    setLive(true, "live · " + new Date().toLocaleTimeString("en-US"));
+  } catch (e) {
+    setLive(false, "policy service unreachable");
+  }
+}
+async function refreshReports() {
+  try {
+    state.reports = await getJSON("/reports");
+    renderReports();
+    if (state.status) renderStatus();
+  } catch (e) { /* the status poll reports connectivity */ }
+}
+async function refreshInvoices() {
+  try { state.invoices = await getJSON("/invoices"); } catch (e) { state.invoices = []; }
+}
+
+function closeInfo() {
+  for (const pop of document.querySelectorAll(".info-pop.open")) {
+    pop.classList.remove("open");
+    document.querySelector(`[aria-controls="${pop.id}"]`).setAttribute("aria-expanded", "false");
+  }
+}
+for (const btn of document.querySelectorAll(".info")) {
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const pop = $(btn.getAttribute("aria-controls"));
+    const opening = !pop.classList.contains("open");
+    closeInfo();
+    if (opening) { pop.classList.add("open"); btn.setAttribute("aria-expanded", "true"); }
+  });
+}
+for (const btn of document.querySelectorAll(".info-close")) btn.addEventListener("click", closeInfo);
+document.addEventListener("click", (ev) => { if (!ev.target.closest(".info-pop")) closeInfo(); });
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeInfo(); });
+
+$("kill-btn").addEventListener("click", async () => {
+  if (!confirm("Submit the break-glass file? This revokes the desk's permission to pay.")) return;
+  try {
+    const res = await fetch("/submit-file", { method: "POST" });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    banner(`Kill switch submitted: ${body.engine_result}. The desk can no longer pay from the account.`, body.engine_result === "tesSUCCESS" ? "good" : "bad");
+  } catch (e) {
+    banner("Kill switch failed: " + e.message, "bad");
+  }
+  refreshStatus(); refreshReports();
+});
+
+$("vendor-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const body = { name: $("v-name").value.trim(), address: $("v-addr").value.trim(),
+                 jurisdiction: $("v-jur").value.trim().toUpperCase(), actor: $("v-actor").value.trim() || "admin" };
+  try {
+    const res = await fetch("/admin/vendor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const reruns = await res.json();
+    banner(`Added ${body.name}. ${reruns.length ? reruns.map((o) => `${o.intent.invoice_id}: ${o.status.replace(/_/g, " ")}`).join(", ") : "No parked invoices for this vendor."}`, "good");
+    ev.target.reset();
+  } catch (e) {
+    banner("Add vendor failed: " + e.message, "bad");
+  }
+  refreshStatus(); refreshReports();
+});
+
+(async () => {
+  await refreshInvoices();
+  await refreshStatus();
+  await refreshReports();
+  setInterval(refreshStatus, 2000);
+  setInterval(refreshReports, 6000);
+  setInterval(refreshInvoices, 10000);
+})();
+</script>
+</body>
+</html>

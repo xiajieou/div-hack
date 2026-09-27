@@ -1,6 +1,7 @@
 """PolicyService: holds the policy key, builds every transaction, countersigns, submits. Contains no model."""
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -16,10 +17,18 @@ from ..audit import AuditChain
 from ..budget import Budget, BudgetError
 from ..config import Policy, VendorRecord, drops_to_xrp, xrp_to_drops
 from .builder import build_payment, same_transaction, strip_signatures
+from .credentials import vendor_has_accepted_credential
 from .rules import Evaluation, Intent, evaluate
 
 MULTISIGN_FEE_DROPS = 36        # base fee x (1 + 2 signers), rounded up
 LAST_LEDGER_WINDOW = 40
+# ed25519 seeds start with sEd; the private key is 66 hex chars starting with ED
+_SECRET = re.compile(r"sEd[1-9A-HJ-NP-Za-km-z]{28}|ED[0-9A-Fa-f]{64}")
+
+
+def public_text(text: str) -> str:
+    """Exception and ledger messages are returned over HTTP and written to the audit log."""
+    return _SECRET.sub("[redacted]", text)
 
 
 @dataclass
@@ -35,13 +44,14 @@ class Outcome:
 
 
 class PolicyService:
-    def __init__(self, policy: Policy, policy_wallet: Wallet, ledger, treasury: str, desk: Optional[str], audit: AuditChain) -> None:
+    def __init__(self, policy: Policy, policy_wallet: Wallet, ledger, treasury: str, desk: Optional[str], audit: AuditChain, registry: Optional[str] = None) -> None:
         self.policy = policy
         self._wallet = policy_wallet                    # never leaves this object
         self.address = policy_wallet.classic_address
         self.ledger = ledger
         self.treasury = treasury
         self.desk = desk                                # None = multisig-only fallback
+        self.registry = registry
         self.audit = audit
         self.budget = Budget(int(xrp_to_drops(policy.daily_cap_xrp)), policy.per_hour_max_payments)
         self.paid_invoices: Set[str] = set()
@@ -71,6 +81,13 @@ class PolicyService:
             return self._done(intent, Outcome("parked", intent.public(), rules, message="Parked. A human must add the vendor; the intent then reruns."))
 
         amount = Decimal(intent.amount)
+        vendor: VendorRecord = self.policy.allowlist[intent.vendor]
+        if not vendor_has_accepted_credential(self.ledger, vendor.address, self.registry):
+            failed = ["vendor holds an accepted registry credential"]
+            rules.append({"rule": failed[0], "ok": False, "soft": False, "note": ""})
+            self.audit.refused(intent.public(), failed)
+            return self._done(intent, Outcome("refused", intent.public(), rules, failed, message="No signature exists; nothing to submit."))
+
         try:
             reservation = self.budget.reserve(int(xrp_to_drops(amount)))
         except BudgetError as e:
@@ -78,7 +95,6 @@ class PolicyService:
             self.audit.refused(intent.public(), failed)
             return self._done(intent, Outcome("refused", intent.public(), rules, failed, message="Refused at reservation time."))
 
-        vendor: VendorRecord = self.policy.allowlist[intent.vendor]
         with self._submit_lock:                      # sequence assignment through submission, one at a time
             self.in_flight.add(intent.invoice_id)
             try:
@@ -96,7 +112,7 @@ class PolicyService:
                     agent_signed = self.daemon.sign(built, intent.nonce)
                 except Exception as e:
                     self.budget.release(reservation)
-                    failed = [str(e)]
+                    failed = [public_text(str(e))]
                     self.audit.refused(intent.public(), failed, {"commitment": commitment})
                     return self._done(intent, Outcome("refused", intent.public(), rules, failed, commitment=commitment,
                                                       message="The signer daemon would not sign."))
@@ -124,14 +140,13 @@ class PolicyService:
                 self.budget.release(reservation)
                 return self._done(intent, Outcome("rejected_by_ledger", intent.public(), rules, [f"ledger: {result.engine_result}"],
                                                   tx_hash=result.hash, engine_result=result.engine_result, commitment=commitment,
-                                                  message=f"Both signatures were valid; the ledger said {result.engine_result}. {result.message}"))
+                                                  message=f"Both signatures were valid; the ledger said {result.engine_result}. {public_text(result.message)}"))
             finally:
                 self.in_flight.discard(intent.invoice_id)
 
     # ----- admin path (logged, human-only) -----
     def admin_add_vendor(self, name: str, address: str, jurisdiction: str, actor: str = "human") -> List[Outcome]:
         self.policy.allowlist[name] = VendorRecord(name, address, jurisdiction)
-        self.daemon.add_vendor(name, address)
         self.audit.admin("add_vendor", {"actor": actor, "vendor": name, "address": address, "jurisdiction": jurisdiction,
                                          "new_policy_hash": self.policy.hash()})
         reruns = []

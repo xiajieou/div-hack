@@ -1,9 +1,25 @@
-# Dashboard (Phase 4, owner: Front)
+# Dashboard and flow view
 
-One page over GET /status from the policy service. Build against mock rows first; switch to the live API when Phase 2 lands.
+## Flow view (`flow.html`, `flow.py`)
 
-Shows: invoices with their decisions (paid, refused, parked, rejected by ledger), testnet explorer links, the poisoned row's hidden text, the blast radius table (Phase 5), the audit completeness result (Phase 6).
+    make flow               # then open http://localhost:8001/
 
-Actions: add vendor (POST /admin/vendor, the logged admin path), kill switch (POST /submit-file with break-glass/revoke.json). The dashboard holds no keys.
+The system drawn as boxes, top to bottom. Pick a scenario and it runs through the real policy service, signer daemon
+and local ledger; each box lights up as it acts (amber working or fooled, green passed, red stopped it, blue waiting for
+a human). Hover or click a box for its live checklist and output. Slow motion pauses between steps; Follow along opens
+the box that is working. Blast radius and audit completeness stay on the right and update after every ledger call.
+`flow.py` only watches: it wraps the functions each part calls and streams what happened. The one exception is the
+"hacked policy service" scenario, which swaps the destination after the payment is built, and says so.
 
-Stack: whatever the owner is fastest in. A single static page polling the API is enough for the demo; Next.js only if it costs nothing.
+## Dashboard (`index.html`)
+
+One page, `index.html`, served by the policy service at `/dashboard`. It holds no keys.
+
+    make dashboard          # local ledger with the demo invoices and two stolen-key attacks, no network
+    make policy             # the real policy service; open http://localhost:8001/dashboard
+
+It polls `GET /status` (invoices, decisions, audit log, ledger history), `GET /reports` (blast radius and audit
+completeness) and `GET /invoices` (inbox files, to show the poisoned invoice's hidden text). Its two buttons call
+`POST /admin/vendor` and `POST /submit-file`; the kill switch stays disabled until `break-glass/revoke.json` exists.
+
+`make dashboard` leaves Northwind Freight parked and prints its address, so the Add vendor form has something to do.

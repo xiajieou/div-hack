@@ -1,0 +1,589 @@
+"""Interactive flow view: run one scenario at a time through the real services and watch each part act.
+
+    python -m dashboard.flow [--port 8001]      then open http://localhost:8001/
+
+Everything runs on a local ledger with the real policy service, signer daemon and ledger checks. This module only
+watches: it wraps the functions each part calls, reports what happened to the page as a stream of events, and
+can slow each step down so a person can follow it. It never changes a decision, except in the one scenario that
+simulates a hacked policy service, which swaps the destination after the payment is built and says so.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import queue
+import sys
+import threading
+import time
+from decimal import Decimal
+from pathlib import Path
+from typing import Callable, Dict, List, Optional
+
+import uvicorn
+from xrpl.transaction import multisign, sign
+from fastapi import Body, FastAPI
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+
+import fuse.policy.service as policy_service
+from fuse.config import drops_to_xrp
+from fuse.policy.rules import Intent
+from fuse.reader.reader import hidden_text, naive_extract
+from fuse.reports.api import build_reports
+from fuse.reports.sources import CLEAN_INVOICES, LocalWorld
+from fuse.signer.daemon import Refusal
+
+PAGE = Path(__file__).resolve().parent / "flow.html"
+STEP = 0.7          # seconds between steps when the throttle is on
+TICK = 0.22         # seconds between checklist items
+
+DAEMON_CHECKS = [
+    ("unknown nonce", "the request ID matches a request the reader filed"),
+    ("already settled", "that request has not been paid already"),
+    ("not a Payment", "it is a Payment"),
+    ("Account is not", "it pays from the paying account"),
+    ("Delegate is not", "it is sent through the desk"),
+    ("Destination does not match", "the destination matches my own vendor record"),
+    ("Amount", "the amount is exactly what was requested"),
+    ("InvoiceID", "the invoice ID is the one requested"),
+    ("Flags", "no special flags (no partial payment)"),
+    ("Fee", "the fee is under the cap"),
+    ("SigningPubKey", "it is set up for two signatures"),
+    ("forbidden field", "no routing tricks (Paths, SendMax, ...)"),
+    ("already carries signatures", "nobody has signed it yet"),
+]
+LEDGER_FAILS = {
+    "tefBAD_QUORUM": 0, "tefBAD_SIGNATURE": 0, "tefNOT_MULTI_SIGNING": 0, "tefBAD_AUTH": 0, "tefMASTER_DISABLED": 0,
+    "tefPAST_SEQ": 1, "terPRE_SEQ": 1, "tefMAX_LEDGER": 1,
+    "tecNO_DELEGATE_PERMISSION": 2, "terNO_DELEGATE_PERMISSION": 2, "temINVALID": 2,
+    "tecUNFUNDED_PAYMENT": 3,
+}
+MEANING = {
+    "tesSUCCESS": "applied",
+    "tefBAD_QUORUM": "not enough signatures: the desk needs both keys",
+    "tefBAD_SIGNATURE": "a signature is not from the desk's signer list",
+    "tecNO_DELEGATE_PERMISSION": "the desk has no permission for this",
+    "terNO_DELEGATE_PERMISSION": "the desk has no permission for this",
+    "temINVALID": "the ledger refuses this through a delegate",
+    "tecUNFUNDED_PAYMENT": "the paying account does not have the money",
+}
+# the local ledger's name for these two is a guess; the real network was checked on Sep 26 2026
+DEVNET_CODE = {"take_over": "temINVALID", "kill": "terNO_DELEGATE_PERMISSION"}
+
+
+def _short(addr: str) -> str:
+    return addr[:6] + "…" + addr[-4:] if addr else ""
+
+
+class Flow:
+    def __init__(self) -> None:
+        self.subscribers: List[queue.Queue] = []
+        self.run_lock = threading.Lock()
+        self.throttle = True
+        self.running: Optional[str] = None
+        self.tamper = False
+        self.actor = "policy"
+        self.reset()
+
+    # ----- the world -----
+    def reset(self) -> None:
+        self.world = w = LocalWorld(invoices=[])
+        # the human's half of approving Northwind, on the daemon's own list, done at setup
+        w.daemon.add_vendor("Northwind Freight", w.ring.northwind.classic_address)
+        self.box_of: Dict[str, str] = {w.addresses["spend"]: "spend", w.addresses["treasury"]: "treasury",
+                                       w.addresses["desk"]: "desk", w.ring.attacker.classic_address: "attacker_acct"}
+        for wallet in [*w.ring.vendors.values(), w.ring.northwind]:
+            self.box_of[wallet.classic_address] = "vendors"
+        self.vendor_name = {wallet.classic_address: name for name, wallet in w.ring.vendors.items()}
+        self.vendor_name[w.ring.northwind.classic_address] = "Northwind Freight"
+        self.last_paid: Optional[str] = None
+        self.baseline = {"vendors": self._vendor_drops(), "attacker_acct": w.ledger.account(w.ring.attacker.classic_address).balance_drops}
+        self._instrument()
+        self.emit({"type": "reset"})
+
+    # ----- events -----
+    def emit(self, event: dict) -> None:
+        for q in list(self.subscribers):
+            q.put(event)
+
+    def pause(self, seconds: float = STEP) -> None:
+        if self.throttle:
+            time.sleep(seconds)
+
+    def state(self, box: str, state: str) -> None:
+        self.emit({"type": "state", "box": box, "state": state})
+
+    def log(self, box: str, text: str, level: str = "") -> None:
+        self.emit({"type": "log", "box": box, "text": text, "level": level})
+
+    def edge(self, a: str, b: str, label: str = "", kind: str = "") -> None:
+        self.emit({"type": "edge", "from": a, "to": b, "label": label, "kind": kind})
+        self.pause()
+
+    def checklist(self, box: str, labels: List[str], results: List[str]) -> None:
+        """Show every check as pending, then reveal the real results one by one."""
+        items = [{"label": l, "state": "pending"} for l in labels]
+        self.emit({"type": "checks", "box": box, "items": items})
+        for i, r in enumerate(results):
+            self.pause(TICK)
+            items[i] = {**items[i], "state": r}
+            self.emit({"type": "checks", "box": box, "items": [dict(x) for x in items]})
+
+    # ----- watching the real code -----
+    def _instrument(self) -> None:
+        w = self.world
+        global _observer
+        _observer = self
+
+        forward = w.daemon._forward
+        def daemon_forward(intent):
+            self.state("daemon", "active")
+            self.log("daemon", f"stored the request under ID {intent.nonce}")
+            self.log("daemon", "it will sign only a payment that matches this request exactly")
+            self.pause()
+            self.state("daemon", "idle")
+            self.edge("daemon", "policy", "request")
+            self.state("policy", "active")
+            self.log("policy", f"request: {intent.amount} XRP to {intent.vendor} for {intent.invoice_id}")
+            return forward(intent)
+        w.daemon._forward = daemon_forward
+
+        sign = w.daemon.sign
+        def daemon_sign(tx, nonce):
+            self.state("daemon", "active")
+            self.log("daemon", "got a payment to sign; comparing it with the stored request")
+            try:
+                signed = sign(tx, nonce)
+            except Refusal as e:
+                failed = next((i for i, (key, _) in enumerate(DAEMON_CHECKS) if key in e.reason), len(DAEMON_CHECKS) - 1)
+                self.checklist("daemon", [l for _, l in DAEMON_CHECKS],
+                               ["ok"] * failed + ["fail"] + ["skip"] * (len(DAEMON_CHECKS) - failed - 1))
+                self.log("daemon", f"refused: {e.reason}", "bad")
+                self.state("daemon", "stop")
+                raise
+            self.checklist("daemon", [l for _, l in DAEMON_CHECKS], ["ok"] * len(DAEMON_CHECKS))
+            self.log("daemon", "every field matches: signed with the agent key", "good")
+            self.state("daemon", "ok")
+            self.edge("daemon", "policy", "agent signature")
+            self.state("policy", "active")
+            self.log("policy", "checked the agent's signature; added the policy signature (2 of 2)")
+            return signed
+        w.daemon.sign = daemon_sign
+
+        reserve = w.service.budget.reserve
+        def budget_reserve(drops):
+            try:
+                rid = reserve(drops)
+            except Exception as e:
+                self.log("policy", f"daily budget: {e}", "bad")
+                self.state("policy", "stop")
+                raise
+            self.log("policy", f"reserved {drops_to_xrp(drops)} XRP against today's cap")
+            return rid
+        w.service.budget.reserve = budget_reserve
+
+        for name, text in (("commit_proposal", "committed the proposal before signing"),
+                           ("append_result", "logged the ledger's answer"), ("refused", "logged the refusal"),
+                           ("parked", "logged the parked request"), ("admin", "logged the admin action")):
+            self._watch_audit(name, text)
+
+        submit = w.ledger.submit
+        def ledger_submit(tx):
+            return self.on_submit(tx, submit)
+        w.ledger.submit = ledger_submit
+
+    def _watch_audit(self, name: str, text: str) -> None:
+        original = getattr(self.world.audit, name)
+        def watched(*args, **kwargs):
+            h = original(*args, **kwargs)
+            self.emit({"type": "edge", "from": "policy", "to": "audit", "label": "", "kind": ""})
+            self.state("audit", "ok")
+            self.log("audit", f"{text} · row {len(self.world.audit.rows) - 1} · hash {h[:12]}")
+            return h
+        setattr(self.world.audit, name, watched)
+
+    def on_rules(self, ev) -> None:
+        self.checklist("policy", [r.name for r in ev.rules],
+                       ["ok" if r.ok else "park" if r.soft else "fail" for r in ev.rules])
+        for r in ev.rules:
+            if not r.ok:
+                self.log("policy", f"{r.name}: {r.note}", "warn" if r.soft else "bad")
+        if ev.decision == "refuse":
+            self.log("policy", "refused. Nothing is built and nothing is signed.", "bad")
+            self.state("policy", "stop")
+        elif ev.decision == "park":
+            self.log("policy", "parked until a human approves this vendor", "warn")
+            self.state("policy", "park")
+        self.pause()
+
+    def on_credential(self, ok: bool) -> None:
+        self.log("policy", "vendor holds an accepted registry credential" if ok
+                 else "vendor has no accepted credential from the registry", "" if ok else "bad")
+        if not ok:
+            self.log("policy", "refused. Nothing is built and nothing is signed.", "bad")
+            self.state("policy", "stop")
+        self.pause()
+
+    def on_built(self, tx: dict) -> dict:
+        dest = tx["Destination"]
+        self.log("policy", f"built the payment: {drops_to_xrp(tx['Amount'])} XRP to {self.vendor_name.get(dest, _short(dest))} "
+                           f"{_short(dest)}, address taken from my own vendor records")
+        if self.tamper:
+            attacker = self.world.ring.attacker.classic_address
+            tx = {**tx, "Destination": attacker}
+            self.log("policy", f"HACKED: destination swapped to the attacker {_short(attacker)}", "bad")
+            self.state("policy", "warn")
+        self.edge("policy", "daemon", "payment to sign")
+        return tx
+
+    def on_submit(self, tx: dict, submit: Callable) -> object:
+        via_desk = bool(tx.get("Delegate"))
+        src = self.box_of.get(tx["Account"], "spend")
+        target = "desk" if via_desk else src
+        if self.actor == "policy":
+            self.log("policy", "submitting the two-signature payment to the ledger")
+            self.state("policy", "ok")
+        who = {"policy": "policy", "attacker": "attacker", "human": "admin"}[self.actor]
+        what = tx["TransactionType"] if tx["TransactionType"] != "Payment" else f"{drops_to_xrp(tx['Amount'])} XRP payment"
+        self.edge(who, target, what)
+        self.state(target, "active")
+        result = submit(tx)
+        code = result.engine_result
+        if via_desk:
+            n = len(tx.get("Signers") or [])
+            labels = [f"signatures meet the desk's 2-of-2 list ({n} given)", "sequence and expiry are valid",
+                      f"the desk's permission covers {tx['TransactionType']}", "the paying account has the money"]
+        else:
+            labels = ["signed with the account's own key", "sequence and expiry are valid", "allowed for this account",
+                      "the account has the money"]
+        failed = LEDGER_FAILS.get(code, None if code == "tesSUCCESS" else 3)
+        results = ["ok"] * 4 if failed is None else ["ok"] * failed + ["fail"] + ["skip"] * (3 - failed)
+        if tx["TransactionType"] != "Payment":
+            labels, results = labels[:3], results[:3]
+        self.checklist(target, labels, results)
+        self.log(target, f"{code}: {MEANING.get(code, result.message or '')}", "good" if code == "tesSUCCESS" else "bad")
+        if code[:3] in ("tef", "tem", "tel", "ter"):
+            self.log(target, "rejected before reaching a ledger: no fee, and not in the account's history or on the explorer")
+        self.state(target, "ok" if code == "tesSUCCESS" else "stop")
+        if code == "tesSUCCESS" and tx["TransactionType"] == "Payment":
+            dest = self.box_of.get(tx["Destination"], "vendors")
+            if via_desk:
+                self.edge("desk", "spend", "acts for")
+            self.edge(src, dest, f"{drops_to_xrp(tx['Amount'])} XRP", "money")
+            self.state(dest, "ok")
+            self.log(dest, f"received {drops_to_xrp(tx['Amount'])} XRP" +
+                     (f" ({self.vendor_name[tx['Destination']]})" if tx["Destination"] in self.vendor_name else ""), "good")
+        self.emit({"type": "reports"})
+        self.pause()
+        return result
+
+    # ----- scenarios -----
+    def invoice(self, name: str):
+        """Hand one invoice file to the reader, then to the daemon, which forwards it to the policy service."""
+        text = self.world.invoice_text(name)
+        hidden = hidden_text(text)
+        self.emit({"type": "invoice", "text": text, "hidden": hidden})
+        self.state("invoice", "warn" if hidden else "active")
+        self.log("invoice", text.splitlines()[0])
+        self.edge("invoice", "reader", "invoice")
+        if not hidden:
+            self.state("invoice", "ok")
+        self.state("reader", "active")
+        intent, _ = naive_extract(text)
+        self.log("reader", f"read: vendor {intent.vendor}, amount {intent.amount} XRP, invoice {intent.invoice_id}")
+        if hidden:
+            self.log("reader", "found an instruction inside the invoice and followed it", "warn")
+            self.log("reader", f"now asking for {intent.amount} XRP to {_short(intent.claimed_destination)}", "warn")
+            self.state("reader", "warn")
+        else:
+            self.state("reader", "ok")
+        self.edge("reader", "daemon", "request")
+        nonce = self.world.daemon.register(intent)
+        outcome = self.world.service.outcomes[nonce]
+        if outcome.status == "paid":
+            self.last_paid = name
+        return outcome
+
+    def verdict_for(self, outcome) -> dict:
+        if outcome.status == "paid":
+            return {"kind": "paid", "title": "Paid, on its own, within the rules", "text": outcome.message}
+        if outcome.status == "parked":
+            return {"kind": "park", "title": "Parked for a human", "text": "Every rule passed except one: nobody has approved this vendor yet."}
+        if outcome.status == "rejected_by_ledger":
+            return {"kind": "stop", "title": "Stopped by the ledger", "by": "desk",
+                    "text": f"{outcome.engine_result}: {MEANING.get(outcome.engine_result, '')}"}
+        by = "daemon" if any("signer daemon" in f for f in outcome.failed) else "policy"
+        who = "the signer daemon" if by == "daemon" else "the policy service"
+        return {"kind": "stop", "title": f"Stopped by {who}", "by": by,
+                "text": "Nothing was signed. " + "; ".join(outcome.failed)}
+
+    def devnet_note(self, scenario: str, local: str) -> str:
+        real = DEVNET_CODE[scenario]
+        return "" if real in local else f" On XRPL devnet the same attempt returns {real}."
+
+    def s_normal(self):
+        todo = [n for n in CLEAN_INVOICES if f"INV-{n.split('_')[1]}" not in self.world.service.paid_invoices]
+        if not todo:
+            return {"kind": "info", "title": "All three clean invoices are paid", "text": "Press Reset to start over."}
+        return self.verdict_for(self.invoice(todo[0]))
+
+    def s_duplicate(self):
+        if not self.last_paid:
+            self.invoice(CLEAN_INVOICES[0])
+            self.pause()
+        return self.verdict_for(self.invoice(self.last_paid or CLEAN_INVOICES[0]))
+
+    def s_overcap(self):
+        return self.verdict_for(self.invoice("inv_9001_lumen_prepay.txt"))
+
+    def s_poisoned(self):
+        return self.verdict_for(self.invoice("inv_2201_verdant_REISSUE.txt"))
+
+    def s_unknown(self):
+        return self.verdict_for(self.invoice("inv_5510_northwind.txt"))
+
+    def _admin_adds_northwind(self, address: str, actor: str):
+        if "INV-5510" in self.world.service.paid_invoices:
+            return {"kind": "info", "title": "Northwind is already approved and paid", "text": "Press Reset to try this again."}
+        parked = any(i.vendor == "Northwind Freight" for i in self.world.service.parked.values())
+        if not parked and "Northwind Freight" not in self.world.policy.allowlist:
+            self.invoice("inv_5510_northwind.txt")
+            self.pause()
+        self.actor = "human"
+        self.state("admin", "active")
+        self.log("admin", f"{actor} approves Northwind Freight at {_short(address)}, US")
+        self.edge("admin", "policy", "add vendor")
+        self.state("admin", "ok")
+        self.state("policy", "active")
+        self.log("policy", "vendor list changed, so the policy hash changed; rerunning the parked request")
+        self.actor = "policy"
+        reruns = self.world.service.admin_add_vendor("Northwind Freight", address, "US", actor=actor)
+        return self.verdict_for(reruns[0] if reruns else self.invoice("inv_5510_northwind.txt"))
+
+    def s_approve(self):
+        return self._admin_adds_northwind(self.world.ring.northwind.classic_address, "cfo")
+
+    def s_corrupt(self):
+        return self._admin_adds_northwind(self.world.ring.attacker.classic_address, "a corrupt admin")
+
+    def s_hacked_policy(self):
+        self.tamper = True
+        try:
+            return self.verdict_for(self.invoice("inv_3300_harbor_after_revoke.txt"))
+        finally:
+            self.tamper = False
+
+    def s_forged(self):
+        self.actor = "attacker"
+        self.state("attacker", "active")
+        self.log("attacker", "sends a payment request straight to the policy service, skipping the reader and daemon")
+        self.edge("attacker", "policy", "forged request")
+        self.state("attacker", "idle")
+        self.actor = "policy"
+        self.state("policy", "active")
+        intent = Intent(vendor="Harbor Cloud Hosting", amount="5", invoice_id="INV-3300", reason="forged", nonce="forged-1")
+        self.log("policy", "request: 5 XRP to Harbor Cloud Hosting for INV-3300")
+        return self.verdict_for(self.world.service.handle_intent(intent))
+
+    def s_agent_key(self):
+        self.actor = "attacker"
+        self.state("attacker", "active")
+        self.log("attacker", "holds the agent key only")
+        self.log("attacker", "signs 50 XRP to itself and sends it straight to the ledger")
+        r = self.world.agent_key_alone(Decimal("50"))
+        return {"kind": "stop", "title": "Stopped by the ledger", "by": "desk", "text": f"{r.engine_result}: {MEANING.get(r.engine_result, '')}"}
+
+    def s_drain(self):
+        self.actor = "attacker"
+        self.state("attacker", "active")
+        self.log("attacker", "holds BOTH keys, and pays itself around the policy service", "bad")
+        start = self.world.ledger.account(self.world.addresses["spend"]).balance_drops
+        for n in range(1, 10):
+            r = self.world.ledger.submit(self._both_keys_payment(Decimal("100"), n))
+            if not r.ok:
+                break
+        taken = start - self.world.ledger.account(self.world.addresses["spend"]).balance_drops
+        treasury = self.world.ledger.account(self.world.addresses["treasury"]).balance_drops
+        return {"kind": "capped", "title": f"Loss capped at the float: {drops_to_xrp(taken)} XRP",
+                "text": f"The treasury ({drops_to_xrp(treasury)} XRP) was never reachable. Audit completeness now flags every one of these payments."}
+
+    def _both_keys_payment(self, amount: Decimal, n: int) -> dict:
+        tx = self.world._attacker_payment(amount, n)
+        return multisign(tx, [sign(tx, self.world.ring.agent, multisign=True), sign(tx, self.world.ring.policy, multisign=True)]).to_xrpl()
+
+    def s_take_over(self):
+        self.actor = "attacker"
+        self.state("attacker", "active")
+        self.log("attacker", "holds both keys and tries to make itself the paying account's only signer", "bad")
+        r = self.world.take_over()
+        return {"kind": "stop", "title": "Stopped by the ledger", "by": "desk",
+                "text": f"{r.engine_result}: the desk may send Payments and nothing else.{self.devnet_note('take_over', r.engine_result)}"}
+
+    def s_top_up(self):
+        self.actor = "human"
+        self.state("admin", "active")
+        self.log("admin", "signs 100 XRP from the treasury to the paying account with the treasury key")
+        r = self.world.top_up(Decimal("100"))
+        self.state("admin", "ok")
+        return {"kind": "paid" if r.ok else "stop", "title": "Refilled by a human" if r.ok else "Top-up failed",
+                "text": f"{r.engine_result}. No program holds the treasury key."}
+
+    def s_kill(self):
+        self.actor = "human"
+        self.state("admin", "active")
+        self.log("admin", "pulls the kill switch: the paying account revokes the desk's permission")
+        self.log("admin", "signed with the paying account's key for now; the pre-signed break-glass file is in progress", "warn")
+        r = self.world.revoke()
+        self.state("admin", "ok")
+        self.pause()
+        self.actor = "policy"
+        v = self.verdict_for(self.invoice("inv_3300_harbor_after_revoke.txt"))
+        if v["kind"] == "stop" and v.get("by") == "desk":
+            v["title"] = "Kill switch held"
+            v["text"] = f"Revoke: {r.engine_result}. Then a fully signed payment: {v['text']}.{self.devnet_note('kill', v['text'])}"
+        return v
+
+    SCENARIOS = {
+        "normal": ("Normal payment", "A real invoice arrives. The agent pays it on its own, within the rules.", "s_normal"),
+        "duplicate": ("Same invoice twice", "The agent tries to pay an invoice that is already paid.", "s_duplicate"),
+        "overcap": ("Too big", "A 48 XRP prepayment, over the 25 XRP per-payment cap.", "s_overcap"),
+        "unknown": ("New vendor", "An invoice from a vendor nobody has approved yet.", "s_unknown"),
+        "approve": ("Admin approves vendor", "A human approves Northwind Freight; the parked invoice reruns.", "s_approve"),
+        "poisoned": ("Poisoned invoice", "Hidden text tells the AI to send 50 XRP to a new account. The AI obeys.", "s_poisoned"),
+        "forged": ("Forged request", "Someone skips the AI and asks the policy service directly.", "s_forged"),
+        "hacked_policy": ("Hacked policy service", "The policy service is compromised and swaps the destination.", "s_hacked_policy"),
+        "corrupt": ("Corrupt admin", "An insider approves Northwind Freight with the attacker's address.", "s_corrupt"),
+        "agent_key": ("Stolen agent key", "An attacker signs a payment to itself with the agent key alone.", "s_agent_key"),
+        "drain": ("Both keys stolen", "The attacker holds both keys and pays itself until the money runs out.", "s_drain"),
+        "take_over": ("Take over the account", "With both keys, the attacker tries to seize the paying account.", "s_take_over"),
+        "top_up": ("Top up", "A human refills the paying account from the treasury.", "s_top_up"),
+        "kill": ("Kill switch", "Revoke the desk's permission, then try a fully signed payment.", "s_kill"),
+    }
+
+    def run(self, name: str, throttle: bool) -> bool:
+        if name not in self.SCENARIOS or not self.run_lock.acquire(blocking=False):
+            return False
+        title, blurb, method = self.SCENARIOS[name]
+        self.throttle, self.running, self.actor = throttle, name, "policy"
+
+        def go():
+            try:
+                self.emit({"type": "start", "scenario": name, "title": title, "blurb": blurb})
+                verdict = getattr(self, method)()
+            except Exception as e:
+                verdict = {"kind": "stop", "title": "Error", "text": f"{type(e).__name__}: {e}"}
+            finally:
+                self.actor, self.running = "policy", None
+                self.run_lock.release()
+            self.emit({"type": "end", "scenario": name, **verdict})
+            self.emit({"type": "reports"})
+
+        threading.Thread(target=go, daemon=True).start()
+        return True
+
+    def _vendor_drops(self) -> int:
+        w = self.world
+        return sum(w.ledger.account(x.classic_address).balance_drops for x in [*w.ring.vendors.values(), w.ring.northwind])
+
+    def snapshot(self) -> dict:
+        w = self.world
+        rep = build_reports(w.service, w.addresses)
+        bal = lambda a: str(drops_to_xrp(w.ledger.account(a).balance_drops)) if a in w.ledger.accounts else "0"
+        return {**rep, "running": self.running, "policy_hash": w.policy.hash(),
+                "balances": {"spend": bal(w.addresses["spend"]), "treasury": bal(w.addresses["treasury"]),
+                             "desk": bal(w.addresses["desk"]),
+                             "vendors": str(drops_to_xrp(self._vendor_drops() - self.baseline["vendors"])),
+                             "attacker_acct": str(drops_to_xrp(w.ledger.account(w.ring.attacker.classic_address).balance_drops
+                                                               - self.baseline["attacker_acct"]))},
+                "delegation": ", ".join(sorted(w.ledger.account(w.addresses["spend"]).delegations.get(w.addresses["desk"], []))),
+                "scenarios": [{"id": k, "title": t, "blurb": b} for k, (t, b, _) in self.SCENARIOS.items()]}
+
+
+_observer: Optional[Flow] = None
+_evaluate, _build, _credential = policy_service.evaluate, policy_service.build_payment, policy_service.vendor_has_accepted_credential
+
+
+def _watching() -> bool:
+    return bool(_observer and _observer.running)
+
+
+def _watched_evaluate(*args, **kwargs):
+    ev = _evaluate(*args, **kwargs)
+    if _watching():
+        _observer.on_rules(ev)
+    return ev
+
+
+def _watched_build(*args, **kwargs):
+    tx = _build(*args, **kwargs)
+    return _observer.on_built(tx) if _watching() else tx
+
+
+def _watched_credential(*args, **kwargs):
+    ok = _credential(*args, **kwargs)
+    if _watching():
+        _observer.on_credential(ok)
+    return ok
+
+
+policy_service.evaluate = _watched_evaluate
+policy_service.build_payment = _watched_build
+policy_service.vendor_has_accepted_credential = _watched_credential
+
+
+def create_app(flow: Flow) -> FastAPI:
+    app = FastAPI()
+
+    @app.get("/")
+    def page():
+        return FileResponse(PAGE)
+
+    @app.get("/flow/state")
+    def state():
+        return flow.snapshot()
+
+    @app.post("/flow/run")
+    def run(body: dict = Body()):
+        if not flow.run(body.get("scenario", ""), bool(body.get("throttle", True))):
+            return JSONResponse(status_code=409, content={"error": "a scenario is already running, or the name is unknown"})
+        return {"started": body.get("scenario")}
+
+    @app.post("/flow/reset")
+    def reset():
+        if flow.running:
+            return JSONResponse(status_code=409, content={"error": "a scenario is running"})
+        flow.reset()
+        return {"ok": True}
+
+    @app.get("/flow/events")
+    def events():
+        q: queue.Queue = queue.Queue()
+        flow.subscribers.append(q)
+
+        def stream():
+            try:
+                yield "data: {\"type\": \"hello\"}\n\n"
+                while True:
+                    try:
+                        yield f"data: {json.dumps(q.get(timeout=15))}\n\n"
+                    except queue.Empty:
+                        yield ": keepalive\n\n"
+            finally:
+                flow.subscribers.remove(q)
+
+        return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+    return app
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Fuse interactive flow view on a local ledger")
+    ap.add_argument("--port", type=int, default=8001)
+    args = ap.parse_args(argv)
+    app = create_app(Flow())
+    print(f"Fuse flow view: http://localhost:{args.port}/", flush=True)
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning", timeout_graceful_shutdown=1)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

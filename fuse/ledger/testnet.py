@@ -98,6 +98,18 @@ class TestnetLedger:
             elif time.time() > deadline:
                 return Result(prelim, h, False, f"not validated after {wait_s}s; check {link}")
 
+    def credentials(self, address: str) -> list:
+        """Credential entries on this account, the same shape LocalLedger.credentials returns. Every page."""
+        found = []
+        marker = None
+        while True:
+            kwargs = {"marker": marker} if marker else {}
+            result = self.client.request(AccountObjects(account=address, ledger_index="validated", type="credential", **kwargs)).result
+            found.extend(o for o in result["account_objects"] if o.get("LedgerEntryType") == "Credential")
+            marker = result.get("marker")
+            if not marker:
+                return found
+
     def describe(self, address: str) -> str:
         info = self.client.request(AccountInfo(account=address, ledger_index="validated")).result["account_data"]
         flags = info.get("Flags", 0)

@@ -21,6 +21,8 @@ from xrpl.core.binarycodec import encode, encode_for_multisigning, encode_for_si
 from xrpl.core.keypairs import derive_classic_address, is_valid_message
 
 RESERVE_DROPS = 1_000_000  # 1 XRP base reserve, kept simple
+LSF_ACCEPTED = 0x00010000  # Credential flag: the subject has accepted it
+_LEDGER_TYPES = {"Payment", "DelegateSet", "SignerListSet", "AccountSet", "CredentialCreate", "CredentialAccept", "CredentialDelete"}
 
 
 @dataclass
@@ -32,6 +34,7 @@ class Account:
     signer_quorum: int = 0
     signer_entries: Dict[str, int] = field(default_factory=dict)      # signer address -> weight
     delegations: Dict[str, Set[str]] = field(default_factory=dict)    # delegate address -> permission values
+    credentials: Dict[tuple, dict] = field(default_factory=dict)      # (issuer, type hex) -> Credential entry, this account as subject
 
 
 @dataclass
@@ -75,6 +78,10 @@ class LocalLedger:
 
     def balance_xrp(self, address: str) -> str:
         return f"{self.account(address).balance_drops / 1_000_000:.6f}"
+
+    def credentials(self, address: str) -> List[dict]:
+        """Credential entries with this account as subject, in account_objects shape."""
+        return [dict(c) for c in self.account(address).credentials.values()]
 
     # ----- submission -----
     def submit(self, tx: dict) -> Result:
@@ -125,7 +132,9 @@ class LocalLedger:
                 return self._record(Result("tecNO_DELEGATE_PERMISSION", h, True,
                                            f"delegation to {delegate_addr[:8]} covers {sorted(granted) or 'nothing'}"), tx)
 
-        # 4. apply
+        # 4. apply. tem never enters a ledger, so an unknown type stops before the fee and sequence are taken.
+        if tx.get("TransactionType") not in _LEDGER_TYPES:
+            return self._record(Result("temUNKNOWN", h, False, f"unsupported type {tx.get('TransactionType')}"), tx)
         fee_payer.balance_drops -= fee
         account.sequence += 1
         code = self._apply(tx, account)
@@ -206,11 +215,40 @@ class LocalLedger:
                     return "tecNO_ALTERNATIVE_KEY"
                 account.master_disabled = True
             return "tesSUCCESS"
+        if t == "CredentialCreate":
+            subject = self.accounts.get(tx["Subject"])
+            if subject is None:
+                return "tecNO_TARGET"
+            key = (account.address, tx["CredentialType"])
+            if key in subject.credentials:
+                return "tecDUPLICATE"
+            subject.credentials[key] = {"LedgerEntryType": "Credential", "Subject": subject.address, "Issuer": account.address,
+                                        "CredentialType": tx["CredentialType"], "Flags": 0}
+            return "tesSUCCESS"
+        if t == "CredentialAccept":
+            entry = account.credentials.get((tx["Issuer"], tx["CredentialType"]))
+            if entry is None:
+                return "tecNO_ENTRY"
+            if entry["Flags"] & LSF_ACCEPTED:
+                return "tecDUPLICATE"
+            entry["Flags"] |= LSF_ACCEPTED
+            return "tesSUCCESS"
+        if t == "CredentialDelete":
+            subject_addr = tx.get("Subject", account.address)
+            issuer_addr = tx.get("Issuer", account.address)
+            if account.address not in (subject_addr, issuer_addr):
+                return "tecNO_PERMISSION"
+            subject = self.accounts.get(subject_addr)
+            if subject is None or (issuer_addr, tx["CredentialType"]) not in subject.credentials:
+                return "tecNO_ENTRY"
+            del subject.credentials[(issuer_addr, tx["CredentialType"])]
+            return "tesSUCCESS"
         return "temUNKNOWN"
 
     def _record(self, r: Result, tx: dict) -> Result:
         self.history.append({"result": r.engine_result, "hash": r.hash, "type": tx.get("TransactionType"),
-                             "account": tx.get("Account"), "delegate": tx.get("Delegate"), "ledger": self.ledger_index})
+                             "account": tx.get("Account"), "delegate": tx.get("Delegate"), "ledger": self.ledger_index,
+                             "destination": tx.get("Destination", ""), "amount": tx.get("Amount")})
         return r
 
     # ----- explorer-style view -----
@@ -221,4 +259,7 @@ class LocalLedger:
             lines.append(f"  signer list: quorum {a.signer_quorum}, entries " + ", ".join(f"{k[:8]}… (w{v})" for k, v in a.signer_entries.items()))
         for d, perms in a.delegations.items():
             lines.append(f"  delegation → {d[:8]}…: {sorted(perms)}")
+        for (issuer, ctype), c in a.credentials.items():
+            state = "accepted" if c["Flags"] & LSF_ACCEPTED else "not accepted"
+            lines.append(f"  credential {bytes.fromhex(ctype).decode(errors='replace')} from {issuer[:8]}…: {state}")
         return "\n".join(lines)

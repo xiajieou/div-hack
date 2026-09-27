@@ -10,10 +10,15 @@ is used instead; it is also expected to be fooled by a convincing enough invoice
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
+import sys
+import time
 from typing import Callable, List, Optional, Tuple
+
+import httpx
 
 from ..policy.rules import Intent
 
@@ -123,3 +128,61 @@ def pick_extractor() -> Tuple[Callable[[str], Tuple[Intent, str]], str]:
         except ImportError:
             pass
     return naive_extract, "naive (deterministic)"
+
+
+# ----- the process: watch an inbox, file each invoice once with the signer daemon -----
+def poll(inbox: str, seen: set, post: Callable[[dict], dict], extract: Callable[[str], Tuple[Intent, str]]) -> List[str]:
+    """One pass. New files are read, extracted and posted exactly once; the daemon's answer becomes one line."""
+    lines = []
+    for name in sorted(os.listdir(inbox)):
+        path = os.path.join(inbox, name)
+        if name in seen or name.startswith(".") or not os.path.isfile(path):
+            continue
+        seen.add(name)
+        with open(path) as f:
+            intent, _ = extract(f.read())
+        body = intent.public()
+        body.pop("nonce")
+        try:
+            outcome = post(body).get("outcome") or {}
+        except httpx.HTTPError as e:
+            # a dead daemon or policy is a line in the log, not the end of the reader
+            outcome = {"status": f"error: {e}"}
+        status = " ".join(x for x in (outcome.get("status", "no reply"), outcome.get("engine_result")) if x)
+        lines.append(f"{name}  {intent.vendor}  {intent.amount} XRP  -> {status}")
+    return lines
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Fuse reader: files intents with the signer daemon, nothing more")
+    ap.add_argument("--inbox", default="inbox/")
+    ap.add_argument("--daemon", default=os.environ.get("DAEMON_URL", "http://localhost:8002"))
+    ap.add_argument("--once", action="store_true", help="one pass, then exit")
+    ap.add_argument("--write-fixtures", action="store_true", help="write the demo invoices to <inbox>/fixtures and exit")
+    args = ap.parse_args(argv)
+
+    if args.write_fixtures:
+        with open(os.environ.get("ACCOUNTS_FILE", "env/accounts.json")) as f:
+            attacker = json.load(f)["attacker"]
+        for p in write_fixtures(os.path.join(args.inbox, "fixtures"), attacker):
+            print(p)
+        return 0
+
+    def post(body: dict) -> dict:
+        response = httpx.post(args.daemon + "/register", json=body, timeout=60)
+        response.raise_for_status()
+        return response.json()
+
+    extract, extractor_name = pick_extractor()
+    print(f"reader: {extractor_name} extractor; watching {args.inbox}; daemon {args.daemon}", flush=True)
+    seen: set = set()
+    while True:
+        for line in poll(args.inbox, seen, post, extract):
+            print(line, flush=True)
+        if args.once:
+            return 0
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

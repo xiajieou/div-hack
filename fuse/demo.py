@@ -1,8 +1,8 @@
 """Run the Fuse demo.
 
   python -m fuse.demo                      # local mini-ledger, no network, real signatures
-  python -m fuse.demo --mode testnet       # XRPL testnet via the public faucet (first run = the S0 spike)
-  python -m fuse.demo --mode testnet --no-delegation   # multisig-only fallback if the amendment is not enabled
+  python -m fuse.demo --mode devnet        # XRPL devnet via the public faucet; Permission Delegation is enabled there
+  python -m fuse.demo --mode testnet --no-delegation   # multisig-only fallback; testnet refuses DelegateSet with temDISABLED
 
 Beats, in the order the challenge brief's four questions suggest:
   0 setup   1-3 three clean invoices   4 prompt-injected invoice   5 leaked agent key (two rejections by the ledger)
@@ -24,8 +24,10 @@ from .audit import AuditChain
 from .config import VendorRecord, default_policy
 from .ledger.local import LocalLedger
 from .policy.builder import build_payment
+from .policy.rules import Intent
 from .policy.service import MULTISIGN_FEE_DROPS, PolicyService
 from .reader.reader import INVOICES, hidden_text, pick_extractor, write_fixtures
+from .registry import setup_local_registry
 from .setup import KeyRing, revoke_delegation, run_setup
 from .signer.daemon import SignerDaemon
 
@@ -59,6 +61,7 @@ def show_outcome(o, ledger) -> None:
 
 
 def main(argv=None) -> int:
+    sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description="Fuse demo")
     ap.add_argument("--mode", choices=["local", "testnet", "devnet"], default="local")
     ap.add_argument("--no-delegation", action="store_true", help="multisig-only fallback: desk holds the funds, no Delegate field")
@@ -94,11 +97,14 @@ def main(argv=None) -> int:
     print(f"  agent key  {ring.agent.classic_address}   (inside the signer daemon)")
     print(f"  policy key {ring.policy.classic_address}   (inside the policy service)")
     print(f"  attacker   {ring.attacker.classic_address}")
+    registry = setup_local_registry(ledger, [*ring.vendors.values(), ring.northwind])
+    print(f"  registry   {registry.classic_address}   (issued verified-vendor credentials; every vendor accepted; the attacker has none)")
     print(f"  policy hash {policy.hash()[:16]}…  per-payment cap {policy.per_payment_cap_xrp} XRP, daily cap {policy.daily_cap_xrp} XRP")
 
     audit = AuditChain(policy.hash())
-    service = PolicyService(policy, ring.policy, ledger, treasury_addr, desk_addr, audit)
-    daemon = SignerDaemon(ring.agent, treasury_addr, desk_addr, {n: v.address for n, v in policy.allowlist.items()},
+    service = PolicyService(policy, ring.policy, ledger, treasury_addr, desk_addr, audit, registry.classic_address)
+    daemon = SignerDaemon(ring.agent, treasury_addr, desk_addr,
+                          {name: w.classic_address for name, w in ring.vendors.items()},
                           policy.fee_cap_drops, forward=service.handle_intent)
     service.attach_daemon(daemon)
 
@@ -163,9 +169,19 @@ def main(argv=None) -> int:
     o, _ = process("inv_5510_northwind.txt")
     show_outcome(o, ledger)
     print("  → a human adds Northwind Freight to the allowlist (logged), and the parked intent reruns:")
+    daemon.add_vendor("Northwind Freight", ring.northwind.classic_address)
     reruns = service.admin_add_vendor("Northwind Freight", ring.northwind.classic_address, "US", actor="cfo@company")
     for o2 in reruns:
         show_outcome(o2, ledger)
+
+    # ----- beat 7b: corrupt admin -----
+    banner("7b", "Corrupt admin: a fake vendor added to both lists, pointed at the attacker")
+    print("  → an insider with admin rights adds 'Acme Consulting' to the allowlist and the daemon directory, address = attacker")
+    daemon.add_vendor("Acme Consulting", ring.attacker.classic_address)
+    service.admin_add_vendor("Acme Consulting", ring.attacker.classic_address, "US", actor="insider@company")
+    nonce = daemon.register(Intent(vendor="Acme Consulting", amount="9.00", invoice_id="INV-6001", reason="consulting, September"))
+    show_outcome(service.outcomes[nonce], ledger)
+    print("  → the registry never issued a credential to that address. One insider is not enough; the rule is code, not a setting.")
 
     # ----- beat 8: kill switch -----
     banner(8, "Kill switch: the treasury revokes the delegation, then a valid double-signed payment is attempted")

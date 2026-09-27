@@ -4,7 +4,6 @@ scripts/                       @isnahos
 fuse/setup.py                  @isnahos
 fuse/ledger/testnet.py         @isnahos
 fuse/breakglass.py             @isnahos
-exercises/ex3_break_glass.py   @isnahos
 # Core services
 fuse/policy/                   @xiajieou
 fuse/signer/                   @xiajieou
@@ -16,8 +15,6 @@ tests/test_acceptance.py       @xiajieou
 # Front
 dashboard/                     @longlostt
 fuse/reports/                  @longlostt
-exercises/ex1_blast_radius.py  @longlostt
-exercises/ex2_audit_completeness.py @longlostt
 pitch/                         @longlostt
 README.md                      @longlostt
 # Shared brain: change it in one commit, tell the other two
