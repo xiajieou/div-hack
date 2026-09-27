@@ -34,6 +34,27 @@ def service_addresses(service) -> Dict[str, str]:
     return {"spend": paying, "desk": service.desk, "treasury": treasury}
 
 
+def build_reports(service, where: Dict[str, str]) -> dict:
+    """Blast radius and audit completeness for a running service, read from the ledger it uses."""
+    source = source_for(service.ledger)
+    try:
+        snapshot = read_snapshot(source, where)
+        history = source.history(where["spend"])
+    except SystemExit as e:
+        return {"error": str(e)}
+    rows, findings = blast_radius(snapshot)
+    outgoing = [t for t in history if t["type"] == "Payment" and t["account"] == where["spend"] and t["result"] == "tesSUCCESS"]
+    missing = unlogged_payments(history, log_hashes(service.audit.dump()), where["spend"])
+    return {
+        "network": "local" if not source.explorer else source.explorer.split("//")[1].split(".")[0],
+        "explorer": source.explorer,
+        "break_glass_file": os.path.exists(os.environ.get("BREAK_GLASS_FILE", "break-glass/revoke.json")),
+        "blast": {"accounts": {k: snapshot[k] for k in ("spend", "desk", "treasury")},
+                  "rows": [r.__dict__ for r in rows], "findings": [f.text for f in findings]},
+        "audit": {"spend": where["spend"], "outgoing": len(outgoing), "unlogged": missing},
+    }
+
+
 def add_routes(app: FastAPI, service, addresses: Optional[Dict[str, str]] = None, inbox: str = "inbox") -> None:
     @app.get("/dashboard")
     def dashboard():
@@ -41,24 +62,7 @@ def add_routes(app: FastAPI, service, addresses: Optional[Dict[str, str]] = None
 
     @app.get("/reports")
     def reports():
-        source = source_for(service.ledger)
-        where = addresses or service_addresses(service)
-        try:
-            snapshot = read_snapshot(source, where)
-            history = source.history(where["spend"])
-        except SystemExit as e:
-            return {"error": str(e)}
-        rows, findings = blast_radius(snapshot)
-        outgoing = [t for t in history if t["type"] == "Payment" and t["account"] == where["spend"] and t["result"] == "tesSUCCESS"]
-        missing = unlogged_payments(history, log_hashes(service.audit.dump()), where["spend"])
-        return {
-            "network": "local" if not source.explorer else source.explorer.split("//")[1].split(".")[0],
-            "explorer": source.explorer,
-            "break_glass_file": os.path.exists(os.environ.get("BREAK_GLASS_FILE", "break-glass/revoke.json")),
-            "blast": {"accounts": {k: snapshot[k] for k in ("spend", "desk", "treasury")},
-                      "rows": [r.__dict__ for r in rows], "findings": [f.text for f in findings]},
-            "audit": {"spend": where["spend"], "outgoing": len(outgoing), "unlogged": missing},
-        }
+        return build_reports(service, addresses or service_addresses(service))
 
     @app.get("/invoices")
     def invoices():

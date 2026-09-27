@@ -1,4 +1,4 @@
-.PHONY: install test demo-local spike setup-testnet topup kill policy daemon reader blast audit-check dashboard
+.PHONY: install test demo-local spike setup-testnet topup kill policy daemon reader blast audit-check dashboard flow
 
 MODE ?= local
 
@@ -16,3 +16,4 @@ reader:         ; $(env) env -u AGENT_SEED -u POLICY_SEED python -m fuse.reader.
 blast:          ; python -m fuse.reports.blast_radius --mode $(MODE)
 audit-check:    ; python -m fuse.reports.audit_completeness --mode $(MODE)
 dashboard:      ; python -m dashboard.serve
+flow:           ; python -m dashboard.flow

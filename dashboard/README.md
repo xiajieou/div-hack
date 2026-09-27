@@ -1,4 +1,17 @@
-# Dashboard
+# Dashboard and flow view
+
+## Flow view (`flow.html`, `flow.py`)
+
+    make flow               # then open http://localhost:8001/
+
+The system drawn as boxes, top to bottom. Pick a scenario and it runs through the real policy service, signer daemon
+and local ledger; each box lights up as it acts (amber working or fooled, green passed, red stopped it, blue waiting for
+a human). Hover or click a box for its live checklist and output. Slow motion pauses between steps; Follow along opens
+the box that is working. Blast radius and audit completeness stay on the right and update after every ledger call.
+`flow.py` only watches: it wraps the functions each part calls and streams what happened. The one exception is the
+"hacked policy service" scenario, which swaps the destination after the payment is built, and says so.
+
+## Dashboard (`index.html`)
 
 One page, `index.html`, served by the policy service at `/dashboard`. It holds no keys.
 

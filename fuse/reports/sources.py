@@ -15,18 +15,19 @@ import os
 from decimal import Decimal
 from typing import Dict, List, Optional, Set
 
-from xrpl.models.transactions import Payment
+from xrpl.models.transactions import Payment, SignerListSet
+from xrpl.models.transactions.signer_list_set import SignerEntry
 from xrpl.transaction import multisign, sign
 from xrpl.wallet import Wallet
 
 from ..audit import AuditChain
-from ..config import VendorRecord, default_policy, drops_to_xrp
+from ..config import VendorRecord, default_policy, drops_to_xrp, xrp_to_drops
 from ..ledger.local import LocalLedger
 from ..policy.builder import build_payment
 from ..policy.service import MULTISIGN_FEE_DROPS, PolicyService
 from ..reader.reader import INVOICES, naive_extract
 from ..registry import setup_local_registry
-from ..setup import KeyRing, run_setup
+from ..setup import KeyRing, revoke_delegation, run_setup
 from ..signer.daemon import SignerDaemon
 
 LSF_DISABLE_MASTER = 0x00100000
@@ -83,7 +84,8 @@ class LocalWorld(LedgerSource):
         # the prototype pays from the account it calls treasury, so that account plays the spend role here,
         # next to a separate treasury that nothing is delegated from
         spend, desk = ring.treasury.classic_address, ring.desk.classic_address
-        treasury = Wallet.create().classic_address
+        self.treasury_wallet = Wallet.create()      # a human's key; nothing automated signs with it
+        treasury = self.treasury_wallet.classic_address
         self.ledger.fund(treasury, 1_000_000_000)
         self.addresses = {"treasury": treasury, "spend": spend, "desk": desk}
         self.audit = AuditChain(self.policy.hash())
@@ -123,6 +125,26 @@ class LocalWorld(LedgerSource):
             signed = multisign(tx, [sign(tx, self.ring.agent, multisign=True), sign(tx, self.ring.policy, multisign=True)])
             if not self.ledger.submit(signed.to_xrpl()).ok:
                 break
+
+    def take_over(self):
+        """An attacker holding both keys tries to replace the paying account's signer list through the desk."""
+        spend, desk = self.addresses["spend"], self.addresses["desk"]
+        tx = SignerListSet(account=spend, delegate=desk, signer_quorum=1,
+                           signer_entries=[SignerEntry(account=self.ring.attacker.classic_address, signer_weight=1)],
+                           fee=str(MULTISIGN_FEE_DROPS), sequence=self.ledger.next_sequence(spend),
+                           last_ledger_sequence=self.ledger.current_ledger_index() + 40, signing_pub_key="")
+        return self.ledger.submit(multisign(tx, [sign(tx, self.ring.agent, multisign=True), sign(tx, self.ring.policy, multisign=True)]).to_xrpl())
+
+    def top_up(self, amount_xrp: Decimal):
+        """A human refills the paying account from the treasury, signing with the treasury key."""
+        treasury = self.treasury_wallet.classic_address
+        tx = Payment(account=treasury, destination=self.addresses["spend"], amount=xrp_to_drops(amount_xrp), fee="12",
+                     sequence=self.ledger.next_sequence(treasury), last_ledger_sequence=self.ledger.current_ledger_index() + 40)
+        return self.ledger.submit(sign(tx, self.treasury_wallet).to_xrpl())
+
+    def revoke(self):
+        """Remove the desk's permission. Signed with the paying account's key until the break-glass file exists."""
+        return revoke_delegation(self.ledger, self.ring)
 
     def log_hashes(self) -> Set[str]:
         return log_hashes(self.audit.dump())
