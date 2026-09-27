@@ -121,8 +121,12 @@ class PolicyService:
                         return self._done(intent, Outcome("refused", intent.public(), rules, failed, commitment=commitment,
                                                           message="The signer daemon would not sign."))
                     same, why = same_transaction(built, agent_signed)
-                    if not same or not self._agent_signature_valid(agent_signed):
+                    if not same:
                         failed = [f"returned transaction is not the one built: {why}"]
+                        self.audit.refused(intent.public(), failed, {"commitment": commitment})
+                        return self._done(intent, Outcome("refused", intent.public(), rules, failed, commitment=commitment))
+                    if not self._agent_signature_valid(agent_signed):
+                        failed = ["agent signature is not valid for the agent key"]
                         self.audit.refused(intent.public(), failed, {"commitment": commitment})
                         return self._done(intent, Outcome("refused", intent.public(), rules, failed, commitment=commitment))
 

@@ -325,8 +325,6 @@ def test_agent_signature_must_use_agent_key(world, monkeypatch):
     impostor = XRPLWallet.create()
 
     def forged_sign(tx, nonce):
-        # Sign the multisign payload for the daemon's Account with an impostor key,
-        # then label Signer.Account as the daemon (the bug the check closes).
         payload = encode_for_multisigning(strip_signatures(tx), world["daemon"].address)
         sig = kp_sign(bytes.fromhex(payload), impostor.private_key)
         out = dict(tx)
@@ -340,7 +338,7 @@ def test_agent_signature_must_use_agent_key(world, monkeypatch):
     monkeypatch.setattr(service.daemon, "sign", forged_sign)
     o = run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
     assert o.status == "refused"
-    assert any("returned transaction is not the one built" in f for f in o.failed)
+    assert any("agent signature is not valid for the agent key" in f for f in o.failed)
     assert len(world["ledger"].history) == before
 
 
