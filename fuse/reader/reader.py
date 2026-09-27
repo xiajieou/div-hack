@@ -143,7 +143,11 @@ def poll(inbox: str, seen: set, post: Callable[[dict], dict], extract: Callable[
             intent, _ = extract(f.read())
         body = intent.public()
         body.pop("nonce")
-        outcome = post(body).get("outcome") or {}
+        try:
+            outcome = post(body).get("outcome") or {}
+        except httpx.HTTPError as e:
+            # a dead daemon or policy is a line in the log, not the end of the reader
+            outcome = {"status": f"error: {e}"}
         status = " ".join(x for x in (outcome.get("status", "no reply"), outcome.get("engine_result")) if x)
         lines.append(f"{name}  {intent.vendor}  {intent.amount} XRP  -> {status}")
     return lines

@@ -1,5 +1,7 @@
 import json
 
+import httpx
+
 from fuse.reader.reader import INVOICES, main, naive_extract, poll
 
 
@@ -31,6 +33,23 @@ def test_poisoned_invoice_posts_only_an_intent(tmp_path):
     poll(str(tmp_path), set(), lambda body: posted.append(body) or {"outcome": {"status": "refused"}}, naive_extract)
     assert posted[0]["amount"] == "50" and posted[0]["claimed_destination"] == attacker
     assert set(posted[0]) == {"vendor", "amount", "invoice_id", "reason", "claimed_destination"}
+
+
+def test_daemon_error_is_a_line_not_a_crash(tmp_path):
+    (tmp_path / "a_lumen.txt").write_text(INVOICES["inv_0092_lumen.txt"])
+    (tmp_path / "b_harbor.txt").write_text(INVOICES["inv_7734_harbor.txt"])
+    calls = []
+
+    def post(body):
+        calls.append(body["vendor"])
+        if len(calls) == 1:
+            raise httpx.ConnectError("connection refused")
+        return {"outcome": {"status": "paid", "engine_result": "tesSUCCESS"}}
+
+    lines = poll(str(tmp_path), set(), post, naive_extract)
+    assert calls == ["Lumen Legal", "Harbor Cloud Hosting"]
+    assert lines[0].endswith("-> error: connection refused")
+    assert lines[1].endswith("-> paid tesSUCCESS")
 
 
 def test_write_fixtures_uses_attacker_from_accounts_file(tmp_path, monkeypatch, capsys):
