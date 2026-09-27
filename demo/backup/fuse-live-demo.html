@@ -129,7 +129,7 @@ td.mono,th.mono{font-family:var(--mono);font-size:12px}
       <div class="hist" id="hist"><span class="small">No transactions yet.</span></div>
       <h3>Audit chain <span id="auditStatus" class="small"></span></h3>
       <div class="audit" id="audit"><span class="small">Empty.</span></div>
-      <p class="note">Result codes use the ledger's names where they exist (tesSUCCESS, tefBAD_QUORUM, tefBAD_SIGNATURE, tefMASTER_DISABLED, tecUNFUNDED_PAYMENT) and the XLS-75 draft's name for a delegated transaction outside its permission (tecNO_DELEGATE_PERMISSION), to be confirmed on the test network.</p>
+      <p class="note">Result codes use the ledger's names where they exist (tesSUCCESS, tefBAD_QUORUM, tefBAD_SIGNATURE, tefMASTER_DISABLED, tecUNFUNDED_PAYMENT) temINVALID for a signer list, regular key or delegation sent through a delegate, and terNO_DELEGATE_PERMISSION for anything else the delegation does not cover, as XRPL devnet returned them.</p>
     </aside>
   </div>
 </div>
@@ -167,6 +167,7 @@ td.mono,th.mono{font-family:var(--mono);font-size:12px}
     var self = this, h = '', blob;
     var rec = function(code, validated, msg){ self.history.unshift({code:code, hash:h, type:tx.TransactionType, delegate:tx.Delegate||''}); return {code:code, hash:h, validated:validated, msg:msg||'', ok: code === 'tesSUCCESS'}; };
     try { blob = xrpl.encode(tx); h = xrpl.hashes.hashSignedTx(blob); } catch(e){ return rec('temMALFORMED', false, 'could not serialize: ' + e.message); }
+    if (tx.Delegate && ['SignerListSet', 'SetRegularKey', 'DelegateSet'].indexOf(tx.TransactionType) >= 0) return rec('temINVALID', false, tx.TransactionType + ' cannot be sent by a delegate');
     var account = this.accounts[tx.Account]; if (!account) return rec('terNO_ACCOUNT', false, 'unknown Account');
     var signer = tx.Delegate ? this.accounts[tx.Delegate] : account; if (!signer) return rec('terNO_ACCOUNT', false, 'unknown Delegate');
     var sig = this.checkSignatures(tx, signer); if (sig.code) return rec(sig.code, false, sig.msg);
@@ -175,7 +176,7 @@ td.mono,th.mono{font-family:var(--mono);font-size:12px}
     var fee = BigInt(tx.Fee || '0'); if (signer.balance < fee) return rec('terINSUF_FEE_B', false, 'fee payer cannot cover the fee');
     if (tx.Delegate){
       var granted = account.delegations[tx.Delegate] || [];
-      if (granted.indexOf(tx.TransactionType) < 0){ signer.balance -= fee; account.sequence++; return rec('tecNO_DELEGATE_PERMISSION', true, 'delegation to ' + tx.Delegate.slice(0,8) + '… covers ' + (granted.length ? granted.join(', ') : 'nothing')); }
+      if (granted.indexOf(tx.TransactionType) < 0){ return rec('terNO_DELEGATE_PERMISSION', false, 'delegation to ' + tx.Delegate.slice(0,8) + '… covers ' + (granted.length ? granted.join(', ') : 'nothing')); }
     }
     signer.balance -= fee; account.sequence++;
     return rec(this.apply(tx, account), true, '');

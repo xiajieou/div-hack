@@ -54,20 +54,17 @@ DAEMON_CHECKS = [
 LEDGER_FAILS = {
     "tefBAD_QUORUM": 0, "tefBAD_SIGNATURE": 0, "tefNOT_MULTI_SIGNING": 0, "tefBAD_AUTH": 0, "tefMASTER_DISABLED": 0,
     "tefPAST_SEQ": 1, "terPRE_SEQ": 1, "tefMAX_LEDGER": 1,
-    "tecNO_DELEGATE_PERMISSION": 2, "terNO_DELEGATE_PERMISSION": 2, "temINVALID": 2,
+    "terNO_DELEGATE_PERMISSION": 2, "temINVALID": 2,
     "tecUNFUNDED_PAYMENT": 3,
 }
 MEANING = {
     "tesSUCCESS": "applied",
     "tefBAD_QUORUM": "not enough signatures: the desk needs both keys",
     "tefBAD_SIGNATURE": "a signature is not from the desk's signer list",
-    "tecNO_DELEGATE_PERMISSION": "the desk has no permission for this",
     "terNO_DELEGATE_PERMISSION": "the desk has no permission for this",
     "temINVALID": "the ledger refuses this through a delegate",
     "tecUNFUNDED_PAYMENT": "the paying account does not have the money",
 }
-# the local ledger's name for these two is a guess; the real network was checked on Sep 26 2026
-DEVNET_CODE = {"take_over": "temINVALID", "kill": "terNO_DELEGATE_PERMISSION"}
 
 
 def _short(addr: str) -> str:
@@ -316,10 +313,6 @@ class Flow:
         return {"kind": "stop", "title": f"Stopped by {who}", "by": by,
                 "text": "Nothing was signed. " + "; ".join(outcome.failed)}
 
-    def devnet_note(self, scenario: str, local: str) -> str:
-        real = DEVNET_CODE[scenario]
-        return "" if real in local else f" On XRPL devnet the same attempt returns {real}."
-
     def s_normal(self):
         todo = [n for n in CLEAN_INVOICES if f"INV-{n.split('_')[1]}" not in self.world.service.paid_invoices]
         if not todo:
@@ -416,7 +409,7 @@ class Flow:
         self.log("attacker", "holds both keys and tries to make itself the paying account's only signer", "bad")
         r = self.world.take_over()
         return {"kind": "stop", "title": "Stopped by the ledger", "by": "desk",
-                "text": f"{r.engine_result}: the desk may send Payments and nothing else.{self.devnet_note('take_over', r.engine_result)}"}
+                "text": f"{r.engine_result}: the desk may send Payments and nothing else."}
 
     def s_top_up(self):
         self.actor = "human"
@@ -439,7 +432,7 @@ class Flow:
         v = self.verdict_for(self.invoice("inv_3300_harbor_after_revoke.txt"))
         if v["kind"] == "stop" and v.get("by") == "desk":
             v["title"] = "Kill switch held"
-            v["text"] = f"Revoke: {r.engine_result}. Then a fully signed payment: {v['text']}.{self.devnet_note('kill', v['text'])}"
+            v["text"] = f"Revoke: {r.engine_result}. Then a fully signed payment: {v['text']}."
         return v
 
     SCENARIOS = {
