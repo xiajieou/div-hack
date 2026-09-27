@@ -125,15 +125,17 @@ def _write_public_facts(ring: KeyRing, vendors: dict, registry: str) -> None:
     (env / "vendors.json").write_text(json.dumps(vendors, indent=2))
 
 
-# Permission Delegation is enabled on devnet and, as of Sep 26 2026, not on testnet (temDISABLED)
 RPC_BY_NETWORK = {"devnet": DEVNET_RPC, "testnet": TESTNET_RPC}
 
 
 def _service_from_env() -> PolicyService:
     daemon_url = os.environ.get("DAEMON_URL")
-    rpc = RPC_BY_NETWORK.get(os.environ.get("NETWORK", "local"))
-    if rpc:
+    network = os.environ.get("NETWORK", "local")
+    if network != "local":
+        rpc = RPC_BY_NETWORK[network]
         accounts = json.loads(Path("env/accounts.json").read_text())
+        if accounts.get("network", network) != network:
+            raise SystemExit(f"env/accounts.json was written for {accounts['network']}, NETWORK is {network}")
         wallet = Wallet.from_seed(os.environ["POLICY_SEED"])
         policy = default_policy()
         audit = AuditChain(policy.hash())

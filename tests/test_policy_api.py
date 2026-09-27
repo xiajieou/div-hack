@@ -149,15 +149,27 @@ def test_network_mode_pays_from_the_spend_account_never_the_treasury(tmp_path, m
         _network_service(tmp_path, monkeypatch, "devnet", without_spend)
 
 
-def test_network_unset_or_unknown_is_local(tmp_path, monkeypatch):
+@pytest.mark.parametrize("value", [None, "local"])
+def test_network_unset_or_local_is_the_local_ledger(tmp_path, monkeypatch, value):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DAEMON_URL", raising=False)
-    for value in (None, "local", "mainnet"):
-        if value is None:
-            monkeypatch.delenv("NETWORK", raising=False)
-        else:
-            monkeypatch.setenv("NETWORK", value)
-        assert isinstance(_service_from_env().ledger, LocalLedger)
+    if value is None:
+        monkeypatch.delenv("NETWORK", raising=False)
+    else:
+        monkeypatch.setenv("NETWORK", value)
+    assert isinstance(_service_from_env().ledger, LocalLedger)
+
+
+def test_network_typo_refuses_to_start_instead_of_running_the_mini_ledger(tmp_path, monkeypatch):
+    with pytest.raises(KeyError, match="Devnet"):
+        _network_service(tmp_path, monkeypatch, "Devnet", NETWORK_ACCOUNTS)
+
+
+def test_network_mode_refuses_an_accounts_file_written_for_another_network(tmp_path, monkeypatch):
+    stale = {**NETWORK_ACCOUNTS, "network": "local"}
+    with pytest.raises(SystemExit, match="written for local, NETWORK is devnet"):
+        _network_service(tmp_path, monkeypatch, "devnet", stale)
+    assert _network_service(tmp_path, monkeypatch, "devnet", {**NETWORK_ACCOUNTS, "network": "devnet"}).ledger.rpc_url == DEVNET_RPC
 
 
 def test_local_mode_with_daemon_url_publishes_facts_and_no_seed(tmp_path, monkeypatch):
