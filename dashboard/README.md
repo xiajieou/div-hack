@@ -2,7 +2,13 @@
 
 ## Flow view (`flow.html`, `flow.py`)
 
-    make flow               # then open http://localhost:8001/
+    make flow               # local ledger; then open http://localhost:8001/
+    make flow MODE=devnet   # the accounts scripts/setup_testnet.py created, real transactions
+
+On devnet the flow server reads env/accounts.json and the agent, policy and spend keys from .env, never the treasury
+key: Top up tells the presenter to run `make topup`. Reset restores the desk's Payment permission after the kill
+switch; accounts and history stay. Audit completeness counts payments since the server started, and the invoices
+already paid on the ledger are read back at startup so a restart cannot pay one twice.
 
 The system drawn as boxes, top to bottom. Pick a scenario and it runs through the real policy service, signer daemon
 and local ledger; each box lights up as it acts (amber working or fooled, green passed, red stopped it, blue waiting for

@@ -34,9 +34,9 @@ def service_addresses(service) -> Dict[str, str]:
     return {"spend": paying, "desk": service.desk, "treasury": treasury}
 
 
-def build_reports(service, where: Dict[str, str]) -> dict:
+def build_reports(service, where: Dict[str, str], source=None) -> dict:
     """Blast radius and audit completeness for a running service, read from the ledger it uses."""
-    source = source_for(service.ledger)
+    source = source or source_for(service.ledger)
     try:
         snapshot = read_snapshot(source, where)
         history = source.history(where["spend"])

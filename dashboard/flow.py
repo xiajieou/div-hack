@@ -1,8 +1,12 @@
 """Interactive flow view: run one scenario at a time through the real services and watch each part act.
 
-    python -m dashboard.flow [--port 8001]      then open http://localhost:8001/
+    python -m dashboard.flow [--port 8001] [--net local|devnet]      then open http://localhost:8001/
 
-Everything runs on a local ledger with the real policy service, signer daemon and ledger checks. This module only
+local (the default) builds a fresh local ledger every reset. devnet uses the accounts scripts/setup_testnet.py created
+(env/accounts.json, keys from the environment or .env) and submits real transactions. Either way it runs the real
+policy service, signer daemon and ledger checks in this one process, as a demo harness. It holds the agent, policy
+and spend keys (the spend key only to pull and restore the kill switch), never the treasury key: a top-up on devnet
+is `make topup`, run by a person. This module only
 watches: it wraps the functions each part calls, reports what happened to the page as a stream of events, and
 can slow each step down so a person can follow it. It never changes a decision, except in the one scenario that
 simulates a hacked policy service, which swaps the destination after the payment is built and says so.
@@ -11,27 +15,39 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import queue
 import sys
 import threading
 import time
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, Dict, List, Optional
 
 import uvicorn
+from xrpl.models.requests import AccountInfo, AccountTx
+from xrpl.models.transactions import DelegateSet
+from xrpl.models.transactions.delegate_set import Permission
 from xrpl.transaction import multisign, sign
+from xrpl.wallet import Wallet
 from fastapi import Body, FastAPI
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 import fuse.policy.service as policy_service
-from fuse.config import drops_to_xrp
+from fuse.audit import AuditChain
+from fuse.config import default_policy, drops_to_xrp
+from fuse.ledger.testnet import TestnetLedger
+from fuse.policy.builder import invoice_id_hash
+from fuse.policy.service import PolicyService
+from fuse.setup import _single_sign
 from fuse.policy.rules import Intent
 from fuse.reader.reader import hidden_text, naive_extract
 from fuse.reports.api import build_reports
-from fuse.reports.sources import CLEAN_INVOICES, LocalWorld
-from fuse.signer.daemon import Refusal
+from fuse.reports.sources import CLEAN_INVOICES, LocalWorld, Network
+from fuse.signer.daemon import Refusal, SignerDaemon
 
+ROOT = Path(__file__).resolve().parents[1]
 PAGE = Path(__file__).resolve().parent / "flow.html"
 STEP = 0.7          # seconds between steps when the throttle is on
 TICK = 0.22         # seconds between checklist items
@@ -71,8 +87,96 @@ def _short(addr: str) -> str:
     return addr[:6] + "…" + addr[-4:] if addr else ""
 
 
-class Flow:
+def _keys(*names: str) -> Dict[str, str]:
+    """Seeds from the environment, else from the .env the setup script wrote."""
+    found = {n: os.environ[n] for n in names if os.environ.get(n)}
+    env = ROOT / ".env"
+    if env.exists():
+        for line in env.read_text().splitlines():
+            key, _, value = line.partition("=")
+            value = value.split("#")[0].strip()
+            if key.strip() in names and value:
+                found.setdefault(key.strip(), value)
+    missing = [n for n in names if n not in found]
+    if missing:
+        raise SystemExit(f"missing {missing}: run scripts/setup_testnet.py first")
+    return found
+
+
+class NetworkWorld(LocalWorld):
+    """The accounts setup_testnet.py created, with the policy service and signer daemon wired in this process."""
+
     def __init__(self) -> None:
+        accounts = json.loads((ROOT / "env" / "accounts.json").read_text())
+        keys = _keys("AGENT_SEED", "POLICY_SEED", "SPEND_SEED")
+        agent, policy_key, spend = (Wallet.from_seed(keys[k]) for k in ("AGENT_SEED", "POLICY_SEED", "SPEND_SEED"))
+        for wallet, name in ((agent, "agent"), (policy_key, "policy"), (spend, "spend")):
+            if wallet.classic_address != accounts[name]:
+                raise SystemExit(f"the {name} key in .env does not match env/accounts.json; re-run setup")
+        self.network = accounts["network"]
+        self.ledger = TestnetLedger(accounts["rpc"])
+        self.net = Network(self.network)
+        self.explorer = accounts["explorer"]
+        self.policy = default_policy()
+        for name in self.policy.allowlist:
+            self.policy.allowlist[name].address = accounts["vendors"][name]
+        # spend signs only the kill switch and its undo; it stands where the local ring keeps the paying account
+        self.ring = SimpleNamespace(agent=agent, policy=policy_key, treasury=spend,
+                                    desk=SimpleNamespace(classic_address=accounts["desk"]), setup_log=[],
+                                    attacker=SimpleNamespace(classic_address=accounts["attacker"]),
+                                    northwind=SimpleNamespace(classic_address=accounts["northwind"]),
+                                    vendors={n: SimpleNamespace(classic_address=a) for n, a in accounts["vendors"].items()})
+        self.addresses = {k: accounts[k] for k in ("treasury", "spend", "desk")}
+        self.audit = AuditChain(self.policy.hash())
+        self.service = PolicyService(self.policy, policy_key, self.ledger, accounts["spend"], accounts["desk"], self.audit,
+                                     accounts.get("registry"))
+        directory = json.loads((ROOT / "env" / "vendors.json").read_text())
+        self.daemon = SignerDaemon(agent, accounts["spend"], accounts["desk"], directory, self.policy.fee_cap_drops,
+                                   forward=self.service.handle_intent)
+        self.service.attach_daemon(self.daemon)
+        # the audit log starts with this process, so only payments made from now on are expected to be in it
+        self.before = {t["hash"] for t in self.net.history(accounts["spend"])}
+        # the service keeps paid invoices in memory; read them back from the ledger so a restart cannot pay twice
+        self.service.paid_invoices |= self._paid_on_ledger(accounts["spend"])
+
+    def _paid_on_ledger(self, spend: str) -> set:
+        by_hash = {invoice_id_hash(i): i for i in self.policy.open_purchase_orders}
+        paid, marker = set(), None
+        while True:
+            r = self.ledger.client.request(AccountTx(account=spend, marker=marker)).result
+            for e in r.get("transactions", []):
+                tx = e.get("tx_json") or e.get("tx", {})
+                if (tx.get("TransactionType") == "Payment" and tx.get("Account") == spend
+                        and e.get("meta", {}).get("TransactionResult") == "tesSUCCESS" and tx.get("InvoiceID") in by_hash):
+                    paid.add(by_hash[tx["InvoiceID"]])
+            marker = r.get("marker")
+            if not marker:
+                return paid
+
+    def facts(self, address: str) -> dict:
+        return self.net.facts(address)
+
+    def history(self, address: str) -> List[dict]:
+        return [t for t in self.net.history(address) if t["hash"] not in self.before]
+
+    def balance_drops(self, address: str) -> int:
+        r = self.ledger.client.request(AccountInfo(account=address, ledger_index="validated")).result
+        return int(r["account_data"]["Balance"]) if "account_data" in r else 0
+
+    def restore(self):
+        """Undo the kill switch: the paying account grants the desk Payment again."""
+        spend, desk = self.addresses["spend"], self.addresses["desk"]
+        if self.net.facts(spend)["delegations"].get(desk) == ["Payment"]:
+            return None
+        tx = DelegateSet(account=spend, authorize=desk, permissions=[Permission(permission_value="Payment")])
+        return self.ledger.submit(_single_sign(tx, self.ring.treasury, self.ledger.next_sequence(spend),
+                                               self.ledger.current_ledger_index() + 40))
+
+
+class Flow:
+    def __init__(self, network: str = "local") -> None:
+        self.network = network
+        self.world = None
         self.subscribers: List[queue.Queue] = []
         self.run_lock = threading.Lock()
         self.throttle = True
@@ -83,7 +187,17 @@ class Flow:
 
     # ----- the world -----
     def reset(self) -> None:
-        self.world = w = LocalWorld(invoices=[])
+        note = "Every account, key and vendor was just created again."
+        if self.network == "local":
+            self.world = LocalWorld(invoices=[])
+        elif self.world is None:
+            self.world = NetworkWorld()
+            note = "Connected to the accounts the setup script created."
+        else:
+            r = self.world.restore()
+            note = (f"The desk's Payment permission was restored: {r.engine_result}." if r
+                    else "The desk still holds its Payment permission.") + " Accounts and history stay as they are."
+        w = self.world
         # the human's half of approving Northwind, on the daemon's own list, done at setup
         w.daemon.add_vendor("Northwind Freight", w.ring.northwind.classic_address)
         self.box_of: Dict[str, str] = {w.addresses["spend"]: "spend", w.addresses["treasury"]: "treasury",
@@ -93,9 +207,11 @@ class Flow:
         self.vendor_name = {wallet.classic_address: name for name, wallet in w.ring.vendors.items()}
         self.vendor_name[w.ring.northwind.classic_address] = "Northwind Freight"
         self.last_paid: Optional[str] = None
-        self.baseline = {"vendors": self._vendor_drops(), "attacker_acct": w.ledger.account(w.ring.attacker.classic_address).balance_drops}
-        self._instrument()
-        self.emit({"type": "reset"})
+        self.baseline = {"vendors": self._vendor_drops(), "attacker_acct": w.balance_drops(w.ring.attacker.classic_address)}
+        if not getattr(w, "_watched", False):
+            self._instrument()
+            w._watched = True
+        self.emit({"type": "reset", "text": note})
 
     # ----- events -----
     def emit(self, event: dict) -> None:
@@ -243,6 +359,8 @@ class Flow:
         what = tx["TransactionType"] if tx["TransactionType"] != "Payment" else f"{drops_to_xrp(tx['Amount'])} XRP payment"
         self.edge(who, target, what)
         self.state(target, "active")
+        if self.world.explorer:
+            self.log(target, f"sent to XRPL {self.network}; the ledger answers now, or after the next close if it applies it")
         result = submit(tx)
         code = result.engine_result
         if via_desk:
@@ -258,6 +376,8 @@ class Flow:
             labels, results = labels[:3], results[:3]
         self.checklist(target, labels, results)
         self.log(target, f"{code}: {MEANING.get(code, result.message or '')}", "good" if code == "tesSUCCESS" else "bad")
+        if self.world.explorer and code[:3] in ("tes", "tec"):
+            self.log(target, f"{self.world.explorer}/transactions/{result.hash}")
         if code[:3] in ("tef", "tem", "tel", "ter"):
             self.log(target, "rejected before reaching a ledger: no fee, and not in the account's history or on the explorer")
         self.state(target, "ok" if code == "tesSUCCESS" else "stop")
@@ -302,7 +422,8 @@ class Flow:
 
     def verdict_for(self, outcome) -> dict:
         if outcome.status == "paid":
-            return {"kind": "paid", "title": "Paid, on its own, within the rules", "text": outcome.message}
+            link = f"{self.world.explorer}/transactions/{outcome.tx_hash}" if self.world.explorer else ""
+            return {"kind": "paid", "title": "Paid, on its own, within the rules", "text": outcome.message, "link": link}
         if outcome.status == "parked":
             return {"kind": "park", "title": "Parked for a human", "text": "Every rule passed except one: nobody has approved this vendor yet."}
         if outcome.status == "rejected_by_ledger":
@@ -389,13 +510,15 @@ class Flow:
         self.actor = "attacker"
         self.state("attacker", "active")
         self.log("attacker", "holds BOTH keys, and pays itself around the policy service", "bad")
-        start = self.world.ledger.account(self.world.addresses["spend"]).balance_drops
+        w = self.world
+        start = w.balance_drops(w.addresses["spend"])
+        chunk = Decimal("100") if self.network == "local" else max(Decimal(1), (drops_to_xrp(start) / 3).quantize(Decimal(1)))
         for n in range(1, 10):
-            r = self.world.ledger.submit(self._both_keys_payment(Decimal("100"), n))
+            r = w.ledger.submit(self._both_keys_payment(chunk, n))
             if not r.ok:
                 break
-        taken = start - self.world.ledger.account(self.world.addresses["spend"]).balance_drops
-        treasury = self.world.ledger.account(self.world.addresses["treasury"]).balance_drops
+        taken = start - w.balance_drops(w.addresses["spend"])
+        treasury = w.balance_drops(w.addresses["treasury"])
         return {"kind": "capped", "title": f"Loss capped at the float: {drops_to_xrp(taken)} XRP",
                 "text": f"The treasury ({drops_to_xrp(treasury)} XRP) was never reachable. Audit completeness now flags every one of these payments."}
 
@@ -412,6 +535,12 @@ class Flow:
                 "text": f"{r.engine_result}: the desk may send Payments and nothing else."}
 
     def s_top_up(self):
+        if self.network != "local":
+            self.state("admin", "active")
+            self.log("admin", "the treasury key stays with a person: run make topup in a terminal")
+            return {"kind": "info", "title": "A person tops up",
+                    "text": "Run make topup in a terminal: it signs with the treasury key, which this page never holds. "
+                            "The paying account's balance here updates when it lands."}
         self.actor = "human"
         self.state("admin", "active")
         self.log("admin", "signs 100 XRP from the treasury to the paying account with the treasury key")
@@ -473,22 +602,29 @@ class Flow:
         threading.Thread(target=go, daemon=True).start()
         return True
 
+    NETWORK_BLURBS = {
+        "approve": "A human approves Northwind Freight. On devnet it holds no registry credential, so the rules still refuse it.",
+        "top_up": "A person refills the paying account with make topup; this page never holds the treasury key.",
+    }
+
     def _vendor_drops(self) -> int:
         w = self.world
-        return sum(w.ledger.account(x.classic_address).balance_drops for x in [*w.ring.vendors.values(), w.ring.northwind])
+        return sum(w.balance_drops(x.classic_address) for x in [*w.ring.vendors.values(), w.ring.northwind])
 
     def snapshot(self) -> dict:
         w = self.world
-        rep = build_reports(w.service, w.addresses)
-        bal = lambda a: str(drops_to_xrp(w.ledger.account(a).balance_drops)) if a in w.ledger.accounts else "0"
-        return {**rep, "running": self.running, "policy_hash": w.policy.hash(),
+        rep = build_reports(w.service, w.addresses, w)
+        bal = lambda a: str(drops_to_xrp(w.balance_drops(a)))
+        spend = rep["blast"]["accounts"]["spend"] if "blast" in rep else {"delegations": {}}
+        blurbs = self.NETWORK_BLURBS if self.network != "local" else {}
+        return {**rep, "network": self.network, "running": self.running, "policy_hash": w.policy.hash(),
                 "balances": {"spend": bal(w.addresses["spend"]), "treasury": bal(w.addresses["treasury"]),
                              "desk": bal(w.addresses["desk"]),
                              "vendors": str(drops_to_xrp(self._vendor_drops() - self.baseline["vendors"])),
-                             "attacker_acct": str(drops_to_xrp(w.ledger.account(w.ring.attacker.classic_address).balance_drops
+                             "attacker_acct": str(drops_to_xrp(w.balance_drops(w.ring.attacker.classic_address)
                                                                - self.baseline["attacker_acct"]))},
-                "delegation": ", ".join(sorted(w.ledger.account(w.addresses["spend"]).delegations.get(w.addresses["desk"], []))),
-                "scenarios": [{"id": k, "title": t, "blurb": b} for k, (t, b, _) in self.SCENARIOS.items()]}
+                "delegation": ", ".join(spend["delegations"].get(w.addresses["desk"], [])),
+                "scenarios": [{"id": k, "title": t, "blurb": blurbs.get(k, b)} for k, (t, b, _) in self.SCENARIOS.items()]}
 
 
 _observer: Optional[Flow] = None
@@ -569,11 +705,13 @@ def create_app(flow: Flow) -> FastAPI:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Fuse interactive flow view on a local ledger")
+    ap = argparse.ArgumentParser(description="Fuse interactive flow view")
     ap.add_argument("--port", type=int, default=8001)
+    ap.add_argument("--net", choices=["local", "devnet"], default="local")
     args = ap.parse_args(argv)
-    app = create_app(Flow())
-    print(f"Fuse flow view: http://localhost:{args.port}/", flush=True)
+    sys.stdout.reconfigure(encoding="utf-8")
+    app = create_app(Flow(args.net))
+    print(f"Fuse flow view ({args.net}): http://localhost:{args.port}/", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning", timeout_graceful_shutdown=1)
     return 0
 
