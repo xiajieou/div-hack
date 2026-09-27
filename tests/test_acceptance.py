@@ -104,6 +104,36 @@ def test_ac06_duplicate_invoice_refused(world):
     assert o.status == "refused" and any("already paid" in f for f in o.failed)
 
 
+def test_ac06_duplicate_invoice_refused_under_concurrency():
+    policy = default_policy()
+    ledger = LocalLedger()
+    ring = KeyRing.local(ledger, policy)
+    run_setup(ledger, ring, delegation=True)
+    registry = setup_local_registry(ledger, [*ring.vendors.values(), ring.northwind])
+    audit = AuditChain(policy.hash())
+    service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit,
+                            registry.classic_address)
+    daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
+                          {name: w.classic_address for name, w in ring.vendors.items()}, policy.fee_cap_drops,
+                          forward=service.handle_intent)
+    service.attach_daemon(daemon)
+    vendor_addr = ring.vendors["Harbor Cloud Hosting"].classic_address
+    results = []
+    barrier = threading.Barrier(6)
+
+    def worker():
+        barrier.wait()
+        it = Intent(vendor="Harbor Cloud Hosting", amount="1.00", invoice_id="INV-7734")
+        nonce = daemon.register(it)
+        results.append(service.outcomes[nonce])
+
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert sum(1 for o in results if o.status == "paid") == 1
+    assert len([h for h in ledger.history if h.get("destination") == vendor_addr]) == 1
+
+
 # ---------- AC7: unknown destination parks; admin add-vendor reruns through the normal flow ----------
 def test_ac07_unknown_vendor_parked_then_rerun(world):
     o = run_intent(world, vendor="Northwind Freight", amount="6.40", invoice_id="INV-5510")

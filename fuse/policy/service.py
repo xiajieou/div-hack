@@ -96,6 +96,12 @@ class PolicyService:
             return self._done(intent, Outcome("refused", intent.public(), rules, failed, message="Refused at reservation time."))
 
         with self._submit_lock:                      # sequence assignment through submission, one at a time
+            if intent.invoice_id in self.paid_invoices:
+                self.budget.release(reservation)
+                failed = ["duplicate invoice"]
+                self.audit.refused(intent.public(), failed)
+                return self._done(intent, Outcome("refused", intent.public(), rules, failed,
+                                                  message="No signature exists; nothing to submit."))
             self.in_flight.add(intent.invoice_id)
             try:
                 sequence = self.ledger.next_sequence(self.treasury)
