@@ -268,6 +268,19 @@ def test_ac13_missing_invoice_id_refused(world):
     assert o.status == "refused" and world["service"].budget.committed_drops() == 0
 
 
+def test_budget_released_when_submit_raises(world, monkeypatch):
+    service = world["service"]
+
+    def boom(tx):
+        raise RuntimeError("submit failed")
+
+    monkeypatch.setattr(service.ledger, "submit", boom)
+    with pytest.raises(RuntimeError, match="submit failed"):
+        run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
+    assert service.budget.committed_drops() == 0
+    assert "INV-2201" not in service.in_flight
+
+
 # ---------- AC15: allowlisted vendor in a disallowed jurisdiction is refused ----------
 def test_ac15_jurisdiction_refused(world):
     world["policy"].open_purchase_orders["INV-RU1"] = "PO-999"
