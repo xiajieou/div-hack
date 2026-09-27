@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -38,8 +39,10 @@ def build_reports(service, where: Dict[str, str], source=None) -> dict:
     """Blast radius and audit completeness for a running service, read from the ledger it uses."""
     source = source or source_for(service.ledger)
     try:
-        snapshot = read_snapshot(source, where)
-        history = source.history(where["spend"])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            history = pool.submit(source.history, where["spend"])
+            snapshot = read_snapshot(source, where)
+            history = history.result()
     except SystemExit as e:
         return {"error": str(e)}
     rows, findings = blast_radius(snapshot)

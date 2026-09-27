@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from typing import List, Tuple
 
@@ -103,9 +104,12 @@ def blast_radius(snapshot: dict) -> Tuple[List[Row], List[Finding]]:
 
 
 def read_snapshot(source, addresses: dict) -> dict:
-    spend = source.facts(addresses["spend"])
-    desk = source.facts(addresses["desk"])
-    treasury = spend if addresses["treasury"] == addresses["spend"] else source.facts(addresses["treasury"])
+    names = ["spend", "desk"] + ([] if addresses["treasury"] == addresses["spend"] else ["treasury"])
+    # each read is a network round trip on devnet, so the accounts are read side by side
+    with ThreadPoolExecutor(max_workers=len(names)) as pool:
+        facts = dict(zip(names, pool.map(lambda n: source.facts(addresses[n]), names)))
+    spend, desk = facts["spend"], facts["desk"]
+    treasury = facts.get("treasury", spend)
     return {"float_drops": spend["balance_drops"], "treasury_drops": treasury["balance_drops"],
             "spend": spend, "desk": desk, "treasury": treasury}
 
