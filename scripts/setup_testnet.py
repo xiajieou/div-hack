@@ -1,10 +1,11 @@
 """One-command setup on the XRPL devnet (delegation is not enabled on testnet). Phase 1, owner: Ledger.
 
 Funds treasury, spend, desk, registry, vendors and the attacker from the faucet; the spend account keeps only the
-float and returns the rest to the treasury (no program signs with the treasury key); spend delegates Payment only
+float and the desk only a small fee budget, both returning the rest to the treasury (no program signs with the
+treasury key); spend creates a Ticket and pre-signs the break-glass revoke against it; spend delegates Payment only
 to the desk; the desk sets its signer list (agent + policy, quorum 2) and disables its master key; the result is
-read back from the ledger and checked; then writes env/accounts.json and env/vendors.json (addresses only) and
-the seeds plus AGENT_ADDRESS to .env.
+read back from the ledger and checked; then writes env/accounts.json and env/vendors.json (addresses only), the
+seeds plus AGENT_ADDRESS to .env, and break-glass/revoke.json.
 The desk seed is never saved: once its master key is off it is useless.
 
     py -3.13 scripts/setup_testnet.py [--float 30] [--net devnet]
@@ -17,7 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from xrpl.models.requests import AccountInfo, AccountObjects, ServerInfo
-from xrpl.models.transactions import AccountSet, AccountSetAsfFlag, DelegateSet, Payment, SignerListSet
+from xrpl.models.transactions import AccountSet, AccountSetAsfFlag, DelegateSet, Payment, SignerListSet, TicketCreate
 from xrpl.models.transactions.delegate_set import Permission
 from xrpl.models.transactions.signer_list_set import SignerEntry
 from xrpl.transaction import autofill, autofill_and_sign, multisign, sign
@@ -26,13 +27,17 @@ from xrpl.wallet import Wallet
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from fuse.breakglass import sign_break_glass  # noqa: E402
 from fuse.config import default_policy, xrp_to_drops  # noqa: E402
 from fuse.ledger.testnet import DEVNET_RPC, TESTNET_RPC, TestnetLedger  # noqa: E402
 
 NETS = {"devnet": DEVNET_RPC, "testnet": TESTNET_RPC}
 SPEND_OBJECTS = 3        # delegation, break-glass ticket, one spare
-FEE_SLACK_DROPS = 1000   # left on the spend account to cover the fee of the return payment
+DESK_OBJECTS = 1         # its signer list
+DESK_FEE_BUDGET_XRP = Decimal("5")  # the desk pays every delegated payment's fee; both keys together can spend it
+FEE_SLACK_DROPS = 1000   # left behind to cover the fee of the return payment
 LSF_DISABLE_MASTER = 0x00100000
+BREAK_GLASS = ROOT / "break-glass" / "revoke.json"
 
 
 def create_accounts(ledger):
@@ -44,19 +49,36 @@ def create_accounts(ledger):
     return w, vendors, extra
 
 
-def set_float(ledger, spend, treasury, float_xrp):
+def reserve_xrp(ledger, objects):
     info = ledger.client.request(ServerInfo()).result["info"]["validated_ledger"]
-    reserve = Decimal(str(info["reserve_base_xrp"])) + SPEND_OBJECTS * Decimal(str(info["reserve_inc_xrp"]))
-    balance = int(ledger.client.request(AccountInfo(account=spend.classic_address, ledger_index="validated")).result["account_data"]["Balance"])
-    excess = balance - int(xrp_to_drops(float_xrp + reserve)) - FEE_SLACK_DROPS
+    return Decimal(str(info["reserve_base_xrp"])) + objects * Decimal(str(info["reserve_inc_xrp"]))
+
+
+def keep_only(ledger, name, wallet, treasury, keep_xrp):
+    """Send everything above keep_xrp back to the treasury, signed by the account itself (never by the treasury)."""
+    balance = int(ledger.client.request(AccountInfo(account=wallet.classic_address, ledger_index="validated")).result["account_data"]["Balance"])
+    excess = balance - int(xrp_to_drops(keep_xrp)) - FEE_SLACK_DROPS
     if excess <= 0:
-        sys.exit(f"spend account holds {balance} drops; not enough for a {float_xrp} XRP float plus {reserve} XRP reserve")
-    tx = Payment(account=spend.classic_address, destination=treasury.classic_address, amount=str(excess))
-    r = ledger.submit(autofill_and_sign(tx, ledger.client, spend).to_xrpl())
-    print(f"  spend returns {excess / 1_000_000:.6f} XRP to treasury   {r.engine_result}  {r.message}")
+        sys.exit(f"{name} holds {balance} drops; not enough to keep {keep_xrp} XRP")
+    tx = Payment(account=wallet.classic_address, destination=treasury.classic_address, amount=str(excess))
+    r = ledger.submit(autofill_and_sign(tx, ledger.client, wallet).to_xrpl())
+    print(f"  {name} keeps {keep_xrp} XRP, returns {excess / 1_000_000:.6f} to treasury   {r.engine_result}  {r.message}")
     if not r.ok:
-        sys.exit("could not set the float")
-    return reserve
+        sys.exit(f"could not trim {name}")
+
+
+def arm_kill_switch(ledger, spend, desk_address):
+    """Reserve a Ticket on the spend account and pre-sign the revoke against it. Runs before the spend account's
+    DelegateSet, so every setup run shows the file does not depend on the account's Sequence."""
+    r = ledger.submit(autofill_and_sign(TicketCreate(account=spend.classic_address, ticket_count=1), ledger.client, spend).to_xrpl())
+    print(f"  TicketCreate on spend (break-glass)                {r.engine_result}  {r.message}")
+    if not r.ok:
+        sys.exit("could not create the break-glass ticket")
+    tickets = [o["TicketSequence"] for o in ledger.client.request(
+        AccountObjects(account=spend.classic_address, ledger_index="validated", type="ticket")).result["account_objects"]]
+    if len(tickets) != 1:
+        sys.exit(f"expected one ticket on the spend account, found {tickets}")
+    return tickets[0], sign_break_glass(spend, desk_address, tickets[0])
 
 
 def wire_desk(ledger, w):
@@ -83,7 +105,7 @@ def wire_desk(ledger, w):
     return hashes
 
 
-def verify(ledger, w, vendor_addr):
+def verify(ledger, w, vendor_addr, ticket):
     """Read the result back from the ledger, then make two refusals that cost nothing and move nothing."""
     spend, desk, agent, policy = (w[k].classic_address for k in ("spend", "desk", "agent", "policy"))
     problems = []
@@ -101,6 +123,9 @@ def verify(ledger, w, vendor_addr):
                  for o in spend_objs if o["LedgerEntryType"] == "Delegate"}
     if delegates != {desk: ["Payment"]}:
         problems.append(f"spend delegations are not exactly desk: Payment: {delegates}")
+    tickets = [o["TicketSequence"] for o in spend_objs if o["LedgerEntryType"] == "Ticket"]
+    if tickets != [ticket]:
+        problems.append(f"spend tickets are {tickets}, expected only the break-glass ticket {ticket}")
 
     pay = autofill(Payment(account=spend, delegate=desk, destination=vendor_addr, amount="1"), ledger.client, signers_count=2)
     r = ledger.submit(multisign(pay, [sign(pay, w["agent"], multisign=True)]).to_xrpl())
@@ -148,17 +173,25 @@ def main():
 
     print("C1 accounts (faucet)")
     w, vendors, extra = create_accounts(ledger)
-    reserve = set_float(ledger, w["spend"], w["treasury"], args.float_xrp)
+    reserve = reserve_xrp(ledger, SPEND_OBJECTS)
+    keep_only(ledger, "spend", w["spend"], w["treasury"], args.float_xrp + reserve)
+    # before the desk's master key goes off: afterwards it cannot sign alone
+    desk_keep = reserve_xrp(ledger, DESK_OBJECTS) + DESK_FEE_BUDGET_XRP
+    keep_only(ledger, "desk", w["desk"], w["treasury"], desk_keep)
+
+    print("D2 break-glass ticket and file")
+    ticket, revoke = arm_kill_switch(ledger, w["spend"], w["desk"].classic_address)
 
     print("C2 delegation, signer list, desk master key off")
     setup_tx = wire_desk(ledger, w)
     print("C2 verify")
-    verify(ledger, w, next(iter(vendors.values())).classic_address)
+    verify(ledger, w, next(iter(vendors.values())).classic_address, ticket)
 
     # written only once everything above succeeded, so a failed run never leaves a half-configured accounts.json
     accounts = {
         "network": args.net, "rpc": ledger.rpc_url, "explorer": ledger.explorer,
-        "float_xrp": str(args.float_xrp), "spend_reserve_xrp": str(reserve),
+        "float_xrp": str(args.float_xrp), "spend_reserve_xrp": str(reserve), "desk_keep_xrp": str(desk_keep),
+        "break_glass_ticket": ticket,
         **{name: wallet.classic_address for name, wallet in w.items()},
         "vendors": {name: wallet.classic_address for name, wallet in vendors.items()},
         "northwind": extra["northwind"].classic_address,
@@ -169,6 +202,7 @@ def main():
     out.write_text(json.dumps(accounts, indent=2) + "\n")
     # the signer daemon's vendor directory, same shape the local mode writes
     (ROOT / "env" / "vendors.json").write_text(json.dumps(accounts["vendors"], indent=2) + "\n")
+    BREAK_GLASS.write_text(json.dumps(revoke, indent=2) + "\n")
 
     env = write_env({
         "NETWORK": args.net,
@@ -186,6 +220,7 @@ def main():
     for name, addr in [*accounts["vendors"].items(), ("northwind (not listed)", accounts["northwind"]), ("attacker", accounts["attacker"])]:
         print(f"  {name:22} {addr}  {ledger.explorer}/accounts/{addr}")
     print(f"  addresses -> {out.relative_to(ROOT)}, env/vendors.json   seeds -> {env.relative_to(ROOT)} (gitignored)")
+    print(f"  kill switch -> {BREAK_GLASS.relative_to(ROOT)} (ticket {ticket}; anyone holding it can revoke the desk)")
 
 
 if __name__ == "__main__":
