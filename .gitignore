@@ -23,3 +23,7 @@ dashboard/.next/
 # Local tooling
 .venv/
 .claude/settings.local.json
+
+# /brag launch-video runs
+brag-output/
+brag-output-*/
