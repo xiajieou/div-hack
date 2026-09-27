@@ -3,7 +3,7 @@
 | Dir | What's in it | Owner |
 |---|---|---|
 | `fuse/` | The Python package: setup, config, audit log, budget, demo | mixed, see CODEOWNERS |
-| `fuse/ledger/` | Ledger backends: local mini-ledger for tests, testnet adapter | Core (local), Ledger (testnet) |
+| `fuse/ledger/` | Ledger backends: local mini-ledger for tests, network adapter (devnet) | Core (local), Ledger (testnet.py) |
 | `fuse/policy/` | Policy service: rules, payment builder, pipeline, HTTP API | Core |
 | `fuse/signer/` | Signer daemon holding the agent key, plus its HTTP API | Core |
 | `fuse/reader/` | Untrusted invoice reader and fixtures | Core |
@@ -11,7 +11,7 @@
 | `scripts/` | Testnet setup, top-up, kill switch, credentials, Phase 0 spike | Ledger |
 | `tests/` | Acceptance tests, plus tests for the reports and the break-glass file | Core |
 | `dashboard/` | Status page over the policy API; holds no keys | Front |
-| `demo/backup/` | Browser demo, the fallback if testnet is down on stage | none |
+| `demo/backup/` | Browser demo, the fallback if devnet is down on stage | none |
 | `pitch/` | Pitch outline and slides | Front |
 | `docs/` | System design diagram (PNG shown in the README, SVG source) | none |
 | `inbox/` `env/` `data/` `break-glass/` | Runtime folders, gitignored | none |

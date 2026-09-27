@@ -14,13 +14,12 @@ Deadline: Devpost submission by 10:30 AM EST, Sunday Sep 27, 2026. Team of 3. Fa
 
 ## Network and assets
 
-- XRPL **testnet** only. JSON-RPC `https://s.altnet.rippletest.net:51234`, WebSocket `wss://s.altnet.rippletest.net:51233`.
-- **Spike in XRP first.** Switch to RLUSD only after a delegated, multisigned payment returns `tesSUCCESS`.
-- RLUSD test tokens from tryrlusd.com. Every account holding RLUSD needs a trust line to the issuer. Get the issuer address from tryrlusd.com / Ripple docs; do not guess it.
-- Fees are always paid in XRP. The desk pays the fee on delegated payments, so it needs XRP even when the payment is RLUSD.
-- Expect trust-line errors (`tecPATH_DRY`, `tecNO_LINE`) before any real problem with the delegation + multisign + RLUSD combination.
-- If RLUSD fights back, demo in XRP and say so in the pitch.
-- Permission Delegation is enabled on testnet. Credentials are almost certainly live; confirm with one `CredentialCreate` in the spike.
+- XRPL **devnet**, in **XRP**. JSON-RPC `https://s.devnet.rippletest.net:51234`, explorer https://devnet.xrpl.org.
+- Not testnet: Permission Delegation (`PermissionDelegationV1_1`) is not enabled there, so `DelegateSet` returns `temDISABLED` (checked Sep 26 2026). It is enabled on devnet.
+- No RLUSD: its issuer exists only on testnet (tryrlusd.com is testnet-only), and delegation is devnet-only. The pitch says "devnet, XRP" and why.
+- Fees are paid in XRP by the desk on delegated payments; the desk keeps only a small fee budget.
+- Credentials are live on devnet (`CredentialCreate` / `CredentialAccept` return `tesSUCCESS`).
+- Result codes confirmed live on devnet through a 2-of-2 desk holding Payment-only permission, both keys signing unless noted: agent key alone `tefBAD_QUORUM`; SignerListSet, SetRegularKey or DelegateSet through the desk `temINVALID`; any other type the delegation does not cover, and any payment after the revoke, `terNO_DELEGATE_PERMISSION`; more than the balance `tecUNFUNDED_PAYMENT`; a second submit of a used break-glass file `tefNO_TICKET`. tem/tef/ter never enter a ledger: no fee, no sequence, not in `account_tx`, not on the explorer. The local ledger returns the same codes.
 
 ## Accounts
 
@@ -48,7 +47,8 @@ The dashboard's kill switch button submits this file. **The dashboard never hold
 - **Reader** (LLM, the only "smart" part): extracts vendor, amount, invoice ID into an *intent*. Never produces addresses that get used, never touches keys.
 - **Signer daemon**: holds the agent key. Stores each intent under a random nonce, forwards it to the policy service, signs only a transaction that exactly matches the stored intent.
 - **Policy service**: holds the policy key. Checks rules, builds the exact transaction itself, verifies the daemon's signature, adds its own, submits, logs.
-- **Dashboard**: invoices, decisions, testnet explorer links, refusals, blast radius report, kill switch (submits the break-glass file).
+- **Dashboard**: invoices, decisions, devnet explorer links, refusals, blast radius report, kill switch (submits the break-glass file).
+- **Flow view** (`make flow`, `MODE=devnet` for real transactions): the demo surface. Runs each scenario through the real services and lights up the part that acts or stops it; a Real AI reader switch sends invoices to Gemini 3.1 Flash-Lite (`GEMINI_API_KEY`).
 
 ## Payment flow
 
@@ -82,7 +82,7 @@ The dashboard's kill switch button submits this file. **The dashboard never hold
 | Policy key | Alone $0. With a poisoned reader too: up to the float, to legitimate vendors only (daemon blocks other destinations/amounts) |
 | Vendor registry key | $0: credential alone doesn't get a vendor on the policy list |
 | Policy admin | No payment outside the vendor list (a listed vendor still needs an accepted registry credential, enforced in code). Can raise caps: with a poisoned reader, up to the float to legitimate vendors |
-| Daemon + policy keys | Spend float, payments only (no setting changes) |
+| Daemon + policy keys | Spend float, payments only (no setting changes), plus the desk's own fee budget |
 | Spend account key | Spend float |
 | Treasury key | Everything (human-only key) |
 
@@ -96,7 +96,7 @@ The report must enumerate every path money could take, or its number is wrong. C
 | Swapped address | Destinations only from policy records |
 | Agent's own mistake (duplicate, over cap, off-list) | Policy service refuses before signing |
 | Leaked agent key alone | Ledger: not enough signatures |
-| Settings change with both keys | Ledger: delegation covers Payment only (record the actual error code in the spike) |
+| Settings change with both keys | Ledger: delegation covers Payment only (`temINVALID` for a signer list, `terNO_DELEGATE_PERMISSION` for other settings) |
 | Both keys stolen | Ledger caps loss at the float |
 | Fake vendor added by corrupt admin | Also needs a registry credential |
 | Kill switch | Break-glass file submitted; even a valid signed payment fails |
@@ -105,7 +105,7 @@ The report must enumerate every path money could take, or its number is wrong. C
 
 Set the float to two or three payments' worth so scene 4 drains it quickly. Scenes total 3:00; budget 3:30 with transitions.
 
-1. Normal payment (20s): agent pays on its own; show it on the testnet explorer.
+1. Normal payment (20s): agent pays on its own; show it on the devnet explorer.
 2. Poisoned invoice (25s): reader fooled, policy refuses, nothing signed.
 3. Agent's own mistake (15s): duplicate refused.
 4. Stolen keys (35s): agent key alone rejected; both keys stop at the float.
@@ -117,8 +117,8 @@ Set the float to two or three payments' worth so scene 4 drains it quickly. Scen
 
 ## Build order
 
-1. **Spike in XRP** (~30 min): one delegated, two-signature payment from the spend account returning `tesSUCCESS` on testnet. Record every result code. Include one `CredentialCreate` and one settings-change attempt to capture its error code.
-2. Switch the spike to RLUSD (trust lines on spend account and vendors).
+1. **Spike in XRP** (~30 min): one delegated, two-signature payment from the spend account returning `tesSUCCESS` on devnet. Record every result code. Include one `CredentialCreate` and one settings-change attempt to capture its error code. Done; codes are under Network and assets.
+2. ~~Switch the spike to RLUSD~~: cut, RLUSD is testnet-only and delegation is devnet-only.
 3. HTTP layer between reader, daemon, policy service.
 4. Break-glass file and dashboard.
 5. Blast radius report.
@@ -135,7 +135,7 @@ Team split: **Ledger** (spike, RLUSD switch, account setup, break-glass file) ·
 
 ## Existing code
 
-- Python prototype with 31 passing acceptance tests against a local mini-ledger that verifies real signatures. **Keep all tests passing.** Add tests for every new rule and attack.
+- Python services with a local mini-ledger that verifies real signatures and returns devnet's result codes. **Keep all tests passing.** Add tests for every new rule and attack.
 - Browser demo running the same logic in xrpl.js.
 - Planning bundle: spec, decisions, roadmap, gate, runbook.
 - The prototype is the source of truth for attack stories; keep the demo and docs matching what the code actually does.
@@ -150,7 +150,7 @@ fuse/                             the package
   setup.py                        accounts, DelegateSet, SignerListSet, master off, revoke       Ledger
   breakglass.py                   Ticket-based pre-signed revocation                             Ledger
   ledger/local.py                 mini-ledger for tests: real signature, quorum, delegation checks   Core
-  ledger/testnet.py               xrpl-py adapter, same interface (untested until the spike)     Ledger
+  ledger/testnet.py               xrpl-py adapter, same interface; defaults to devnet             Ledger
   policy/rules.py                 the rules; human-owned, no agent edits                          Core
   policy/builder.py               canonical Payment                                               Core
   policy/service.py               the pipeline                                                    Core
@@ -161,29 +161,31 @@ fuse/                             the package
   reader/reader.py                untrusted reader and invoice fixtures (Phase 3 makes it a process)   Core
   reports/blast_radius.py         worst case per compromised part, setup findings (Phase 5)       Front
   reports/audit_completeness.py   ledger payments missing from the audit log (Phase 6)            Front
+  reports/sources.py, api.py      ledger reads for the reports; /dashboard, /reports, /invoices    Front
+  registry.py                     vendor registry: issue, accept, revoke credentials             Core
   audit.py, budget.py             hash chain; atomic reservations                                  Core
   demo.py                         local demo; doubles as the integration test                     Core
 scripts/spike/run.py              Phase 0, raced in two worktrees, throwaway                       Ledger
-scripts/setup_testnet.py          Phase 1: fund, delegate, signer list, ticket, break-glass file   Ledger
+scripts/setup_testnet.py          devnet: fund, float, ticket + break-glass file, delegate, signer list, master off; writes env/ and .env   Ledger
 scripts/topup.py                  human-signed top-up (demo scene 5)                               Ledger
 scripts/kill_switch.py            submits break-glass/revoke.json; holds no key                    Ledger
-scripts/credentials.py            Phase 7: registry issues, vendors accept                         whoever finishes first
+scripts/credentials.py            registry issues, vendors (and Northwind) accept; make credentials  whoever finishes first
 tests/                            test_acceptance.py (AC3–AC16), blast radius, audit, break-glass  Core owns test_acceptance.py
-dashboard/                        Phase 4; holds no keys                                           Front
-demo/backup/fuse-live-demo.html   browser demo in xrpl.js; the fallback if testnet is down on stage
+dashboard/                        dashboard (index.html, serve.py) and flow view (flow.html, flow.py); holds no keys   Front
+demo/backup/fuse-live-demo.html   browser demo in xrpl.js; the fallback if devnet is down on stage
 pitch/                            outline and slides (Phase 8)                                     Front
 planning/                         SPEC, ROADMAP, DECISIONS, CATCHUP, LEARN, PROMPTS; gitignored, shared on the team drive
 inbox/ env/ data/ break-glass/    runtime folders, gitignored; env/accounts.json is written by setup
 ```
 
-Commands (Makefile): `make install` · `make test` · `make demo-local` · `make spike` · `make setup-testnet` · `make topup` · `make kill` · `make policy` / `make daemon` / `make reader` (three terminals) · `make blast` · `make audit-check`. Tests: `pytest -q` (42 pass; the 3 break-glass tests are skipped until fuse/breakglass.py is implemented).
+Commands (Makefile): `make install` · `make test` · `make demo-local` · `make spike` · `make setup-testnet` (devnet) · `make credentials` · `make topup` · `make kill` · `make policy` / `make daemon` / `make reader` (three terminals) · `make blast` · `make audit-check` · `make dashboard` · `make flow`. `MODE=devnet` points blast, audit-check and flow at the accounts setup wrote. Tests: `pytest -q` (all pass, none skipped). On Windows without make, run the `python ...` command from the Makefile line directly.
 
 Session protocol: start by reading planning/CATCHUP.md and the current phase in planning/ROADMAP.md; end by updating CATCHUP.md (where we are, what is green with the boundary command's output, what is broken, the next single step and its owner). Prompts for every phase, the race, the rematch and the sweeps are in planning/PROMPTS.md.
 
 ## Conventions
 
 - Python with `xrpl-py` for services; xrpl.js only in the browser demo.
-- Don't invent XRPL field names, flags, error codes, or addresses. Check the docs (xrpl.org/docs, the XRPL MCP server, Context7), run it on testnet, or ask.
+- Don't invent XRPL field names, flags, error codes, or addresses. Check the docs (xrpl.org/docs, the XRPL MCP server, Context7), run it on devnet, or ask.
 - When a ledger call fails, surface the exact result code; don't swallow it.
 - Keep the reader simple. This track is about the financial guardrails, not the AI.
 - Prefer small, working, demoable increments over big refactors.
