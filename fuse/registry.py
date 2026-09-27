@@ -41,6 +41,10 @@ def setup_local_registry(ledger, vendors: Iterable[Wallet]) -> Wallet:
     registry = Wallet.create()
     ledger.fund(registry.classic_address, 20_000_000)
     for vendor in vendors:
-        issue(ledger, registry, vendor.classic_address)
-        accept(ledger, vendor, registry.classic_address)
+        created = issue(ledger, registry, vendor.classic_address)
+        if not created.ok:
+            raise RuntimeError(f"{created.engine_result}: {created.message}")
+        accepted = accept(ledger, vendor, registry.classic_address)
+        if not accepted.ok:
+            raise RuntimeError(f"{accepted.engine_result}: {accepted.message}")
     return registry

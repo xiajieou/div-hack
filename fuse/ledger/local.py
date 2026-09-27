@@ -22,6 +22,7 @@ from xrpl.core.keypairs import derive_classic_address, is_valid_message
 
 RESERVE_DROPS = 1_000_000  # 1 XRP base reserve, kept simple
 LSF_ACCEPTED = 0x00010000  # Credential flag: the subject has accepted it
+_LEDGER_TYPES = {"Payment", "DelegateSet", "SignerListSet", "AccountSet", "CredentialCreate", "CredentialAccept", "CredentialDelete"}
 
 
 @dataclass
@@ -131,7 +132,9 @@ class LocalLedger:
                 return self._record(Result("tecNO_DELEGATE_PERMISSION", h, True,
                                            f"delegation to {delegate_addr[:8]} covers {sorted(granted) or 'nothing'}"), tx)
 
-        # 4. apply
+        # 4. apply. tem never enters a ledger, so an unknown type stops before the fee and sequence are taken.
+        if tx.get("TransactionType") not in _LEDGER_TYPES:
+            return self._record(Result("temUNKNOWN", h, False, f"unsupported type {tx.get('TransactionType')}"), tx)
         fee_payer.balance_drops -= fee
         account.sequence += 1
         code = self._apply(tx, account)
