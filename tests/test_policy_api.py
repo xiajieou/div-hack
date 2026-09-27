@@ -139,6 +139,13 @@ def test_network_devnet_uses_the_devnet_rpc(tmp_path, monkeypatch):
     assert _network_service(tmp_path, monkeypatch, "testnet", accounts).ledger.rpc_url == TESTNET_RPC
 
 
+def test_network_mode_pays_from_the_spend_account_when_setup_wrote_one(tmp_path, monkeypatch):
+    accounts = {"treasury": "rTreasury", "spend": "rSpend", "desk": "rDesk"}
+    assert _network_service(tmp_path, monkeypatch, "devnet", accounts).treasury == "rSpend"
+    del accounts["spend"]
+    assert _network_service(tmp_path, monkeypatch, "devnet", accounts).treasury == "rTreasury"
+
+
 def test_network_unset_or_unknown_is_local(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DAEMON_URL", raising=False)
@@ -165,7 +172,8 @@ def test_local_mode_with_daemon_url_publishes_facts_and_no_seed(tmp_path, monkey
     assert accounts["treasury"] == service.treasury and accounts["desk"] == service.desk
     assert vendors == {name: v.address for name, v in service.policy.allowlist.items()}
     # public facts only: a fixed key set, and every value is a classic address, never a seed or key
-    assert set(accounts) == {"network", "treasury", "desk", "policy", "registry", "attacker", "northwind"}
+    assert set(accounts) == {"network", "treasury", "spend", "desk", "policy", "registry", "attacker", "northwind"}
+    assert accounts["spend"] == service.treasury
     assert accounts["registry"] == service.registry
     for value in [v for k, v in accounts.items() if k != "network"] + list(vendors.values()):
         assert is_valid_classic_address(value)

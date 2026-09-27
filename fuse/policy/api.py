@@ -114,6 +114,7 @@ def _write_public_facts(ring: KeyRing, vendors: dict, registry: str) -> None:
     accounts = {
         "network": "local",
         "treasury": ring.treasury.classic_address,
+        "spend": ring.treasury.classic_address,
         "desk": ring.desk.classic_address,
         "policy": ring.policy.classic_address,
         "registry": registry,
@@ -136,7 +137,9 @@ def _service_from_env() -> PolicyService:
         wallet = Wallet.from_seed(os.environ["POLICY_SEED"])
         policy = default_policy()
         audit = AuditChain(policy.hash())
-        service = PolicyService(policy, wallet, TestnetLedger(rpc), accounts["treasury"], accounts["desk"], audit, accounts.get("registry"))
+        # the setup script writes a separate spend account; the local ring pays from one account
+        paying = accounts.get("spend") or accounts["treasury"]
+        service = PolicyService(policy, wallet, TestnetLedger(rpc), paying, accounts["desk"], audit, accounts.get("registry"))
     elif daemon_url:
         service = _local_service(os.environ["AGENT_ADDRESS"])
     else:
