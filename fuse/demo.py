@@ -61,6 +61,7 @@ def show_outcome(o, ledger) -> None:
 
 
 def main(argv=None) -> int:
+    sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description="Fuse demo")
     ap.add_argument("--mode", choices=["local", "testnet", "devnet"], default="local")
     ap.add_argument("--no-delegation", action="store_true", help="multisig-only fallback: desk holds the funds, no Delegate field")
