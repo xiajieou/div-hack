@@ -74,7 +74,7 @@ Fuse runs on **XRPL devnet, in XRP**. Permission Delegation, which the desk depe
 | Separate spend account, refilled by hand from a treasury | In progress; payments currently come from a single account |
 | Pre-signed break-glass file (kill switch that needs no key) | In progress; the demo currently revokes with the account key |
 | One-command devnet setup | In progress |
-| Reader as its own process watching `inbox/` | Working (`make reader`) |
+| Reader as its own process watching `inbox/` | Working (`make reader`). Deterministic extractor by default; with `OPENROUTER_API_KEY` set it asks a real model and falls back to the deterministic one if the call fails |
 | Dashboard | Working on the local ledger; kill switch button waits for the break-glass file |
 | Vendor credentials from an on-ledger registry | Working on the local ledger; not yet issued on devnet |
 
