@@ -79,7 +79,7 @@ def test_submit_file_revokes_then_payment_rejected(world, tmp_path, monkeypatch)
     world["daemon"].register(intent)
     body = client.post("/intent", json=intent.public()).json()
     assert body["status"] == "rejected_by_ledger"
-    assert body["engine_result"] == "tecNO_DELEGATE_PERMISSION"
+    assert body["engine_result"] == "terNO_DELEGATE_PERMISSION"
 
 
 def test_missing_credential_refuses_before_reservation(world, monkeypatch):

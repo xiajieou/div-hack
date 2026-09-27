@@ -188,9 +188,11 @@ def test_ac09_non_payment_rejected_by_delegation_scope(world):
                        fee=str(MULTISIGN_FEE_DROPS), sequence=ledger.next_sequence(ring.treasury.classic_address),
                        last_ledger_sequence=9999, signing_pub_key="")
     both = multisign(tx, [sign(tx, ring.agent, multisign=True), sign(tx, ring.policy, multisign=True)]).to_xrpl()
+    seq = ledger.next_sequence(ring.treasury.classic_address)
     r = ledger.submit(both)
-    assert r.engine_result == "tecNO_DELEGATE_PERMISSION"
+    assert r.engine_result == "temINVALID"
     assert ledger.account(ring.treasury.classic_address).signer_quorum == 0
+    assert ledger.next_sequence(ring.treasury.classic_address) == seq
 
 
 # ---------- AC10: after revocation, a valid double-signed payment is rejected by the ledger ----------
@@ -198,7 +200,7 @@ def test_ac10_revocation_rejects_valid_payment(world):
     assert run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201").status == "paid"
     assert revoke_delegation(world["ledger"], world["ring"]).ok
     o = run_intent(world, vendor="Harbor Cloud Hosting", amount="5.00", invoice_id="INV-3300")
-    assert o.status == "rejected_by_ledger" and o.engine_result == "tecNO_DELEGATE_PERMISSION"
+    assert o.status == "rejected_by_ledger" and o.engine_result == "terNO_DELEGATE_PERMISSION"
 
 
 # ---------- AC11: the audit chain verifies, and detects an edited row ----------

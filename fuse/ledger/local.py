@@ -5,11 +5,13 @@ xrpl-py's binary codec and keypair verification exactly the way a validator woul
   - a multisigned transaction must carry valid signatures from signer-list members whose weights reach the quorum
   - a single-signed transaction must be signed by the account's master key, and that key must not be disabled
   - a transaction carrying a Delegate field must match a permission the delegating account granted
-  - sequence numbers, balances and fees behave like the real thing (tec results still claim the fee)
+  - sequence numbers, balances and fees behave like the real thing: tec results claim the fee and the sequence,
+    while tem, tef and ter results never enter a ledger and take neither
 
-Result codes use the real XRPL names where they exist (tesSUCCESS, tefBAD_QUORUM, tefBAD_SIGNATURE, tefMASTER_DISABLED,
-tefPAST_SEQ, tecUNFUNDED_PAYMENT) and the XLS-75 draft's name for a delegated transaction outside its permission
-(tecNO_DELEGATE_PERMISSION). Confirm the last one against the test network in the S0 spike.
+Result codes are the ones XRPL devnet returned on Sep 26 2026 for the same attempts through a 2-of-2 desk holding
+Payment-only permission: tefBAD_QUORUM (agent key alone), tecUNFUNDED_PAYMENT (more than the balance), temINVALID
+(SignerListSet, SetRegularKey or DelegateSet sent through a delegate) and terNO_DELEGATE_PERMISSION (any other type
+the delegation does not cover, including every type after the delegation is revoked).
 """
 from __future__ import annotations
 
@@ -22,6 +24,8 @@ from xrpl.core.keypairs import derive_classic_address, is_valid_message
 
 RESERVE_DROPS = 1_000_000  # 1 XRP base reserve, kept simple
 LSF_ACCEPTED = 0x00010000  # Credential flag: the subject has accepted it
+# the real ledger refuses these through a delegate as malformed, whatever was granted
+_NOT_DELEGABLE = {"SignerListSet", "SetRegularKey", "DelegateSet"}
 _LEDGER_TYPES = {"Payment", "DelegateSet", "SignerListSet", "AccountSet", "CredentialCreate", "CredentialAccept", "CredentialDelete"}
 
 
@@ -94,6 +98,8 @@ class LocalLedger:
 
         account_addr = tx.get("Account")
         delegate_addr = tx.get("Delegate")
+        if delegate_addr and tx.get("TransactionType") in _NOT_DELEGABLE:
+            return self._record(Result("temINVALID", h, False, f"{tx.get('TransactionType')} cannot be sent by a delegate"), tx)
         if account_addr not in self.accounts:
             return self._record(Result("terNO_ACCOUNT", h, False, "unknown Account"), tx)
         account = self.accounts[account_addr]
@@ -126,10 +132,8 @@ class LocalLedger:
         if delegate_addr:
             granted = account.delegations.get(delegate_addr, set())
             if tx.get("TransactionType") not in granted:
-                # tec: the transaction is in a validated ledger, the fee is claimed, the intent failed
-                fee_payer.balance_drops -= fee
-                account.sequence += 1
-                return self._record(Result("tecNO_DELEGATE_PERMISSION", h, True,
+                # ter: never enters a ledger, so no fee and no sequence
+                return self._record(Result("terNO_DELEGATE_PERMISSION", h, False,
                                            f"delegation to {delegate_addr[:8]} covers {sorted(granted) or 'nothing'}"), tx)
 
         # 4. apply. tem never enters a ledger, so an unknown type stops before the fee and sequence are taken.
