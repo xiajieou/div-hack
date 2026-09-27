@@ -15,12 +15,18 @@ build_break_glass() returns the UNSIGNED transaction dict; sign_break_glass() re
 """
 from __future__ import annotations
 
+from xrpl.models.transactions import DelegateSet
+from xrpl.transaction import sign
 from xrpl.wallet import Wallet
 
 
 def build_break_glass(spend_address: str, desk_address: str, ticket_sequence: int, fee_drops: int = 1000) -> dict:
-    raise NotImplementedError("build_break_glass")
+    # no autofill: it would replace Sequence 0 and add a LastLedgerSequence, and the file must never expire
+    tx = DelegateSet(account=spend_address, authorize=desk_address, permissions=[],
+                     sequence=0, ticket_sequence=ticket_sequence, fee=str(fee_drops))
+    return tx.to_xrpl()
 
 
 def sign_break_glass(spend_wallet: Wallet, desk_address: str, ticket_sequence: int, fee_drops: int = 1000) -> dict:
-    raise NotImplementedError("sign_break_glass")
+    unsigned = build_break_glass(spend_wallet.classic_address, desk_address, ticket_sequence, fee_drops)
+    return sign(DelegateSet.from_xrpl(unsigned), spend_wallet).to_xrpl()

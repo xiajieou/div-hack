@@ -1,11 +1,8 @@
-import pytest
 from xrpl.core.binarycodec import encode_for_signing
 from xrpl.core.keypairs import derive_classic_address, is_valid_message
 from xrpl.wallet import Wallet
 
 from fuse.breakglass import build_break_glass, sign_break_glass
-
-pytestmark = pytest.mark.skip(reason="break-glass builder not implemented yet; delete this line when it is")
 
 
 def test_unsigned_shape():
