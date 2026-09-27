@@ -53,7 +53,7 @@ On Windows, set `PYTHONIOENCODING=utf-8` first (PowerShell: `$env:PYTHONIOENCODI
 | `python -m fuse.demo --mode devnet` | Same demo on XRPL devnet with fresh faucet accounts; takes a few minutes |
 | `make blast` | Blast radius report: worst case per stolen key, plus any setup mistake that would make it worse |
 | `make audit-check` | Audit completeness: payments on the ledger that the audit log never saw |
-| `make flow` | Interactive view at http://localhost:8001/: run any scenario and watch each part pass, stop or get fooled (`MODE=devnet` for real transactions) |
+| `make flow` | Interactive view at http://localhost:8001/: run any scenario and watch each part pass, stop or get fooled (`MODE=devnet` for real transactions; with `GEMINI_API_KEY` set, a Real AI reader switch lets a real model read each invoice) |
 | `make dashboard` | Dashboard on the local ledger at http://localhost:8001/dashboard: invoices, decisions, ledger activity, both reports |
 
 ### On XRPL devnet

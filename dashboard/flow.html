@@ -242,6 +242,7 @@ td.num.zero{color:var(--pass)}
       <div class="toggles">
         <label class="switch"><span>Slow motion<small>pause between steps so you can follow</small></span><input type="checkbox" id="throttle" checked></label>
         <label class="switch"><span>Follow along<small>open the details of the part that is working</small></span><input type="checkbox" id="follow" checked></label>
+        <label class="switch"><span>Real AI reader<small id="reader-note">a real model reads each invoice</small></span><input type="checkbox" id="model-reader" disabled></label>
       </div>
       <div class="groups" id="groups"></div>
     </aside>
@@ -531,7 +532,7 @@ function markRunning() {
 }
 async function runScenario(id) {
   pinned = null; hidePop();
-  const res = await fetch("/flow/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scenario: id, throttle: $("throttle").checked }) });
+  const res = await fetch("/flow/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scenario: id, throttle: $("throttle").checked, reader: $("model-reader").checked ? "model" : "scripted" }) });
   if (!res.ok) setCaption("stop", "Could not start", (await res.json().catch(() => ({}))).error || "HTTP " + res.status);
 }
 $("reset").addEventListener("click", async () => { hidePop(); await fetch("/flow/reset", { method: "POST" }); });
@@ -543,6 +544,11 @@ async function refresh() {
   try { snap = await (await fetch("/flow/state", { cache: "no-store" })).json(); } catch { return; }
   if (!document.querySelector(".scen")) renderControls(snap.scenarios);
   $("policy-chip").textContent = "policy " + snap.policy_hash.slice(0, 10);
+  if (snap.reader) {
+    $("model-reader").disabled = !snap.reader.available;
+    $("reader-note").textContent = snap.reader.available ? snap.reader.model + " reads each invoice; off = the scripted reader"
+                                                         : "no GEMINI_API_KEY in .env; using the scripted reader";
+  }
   if (snap.network !== "local" && !document.body.dataset.net) {
     document.body.dataset.net = snap.network;
     $("net-chip").textContent = "XRPL " + snap.network + ", live";
