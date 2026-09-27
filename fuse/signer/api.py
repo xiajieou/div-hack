@@ -1,4 +1,4 @@
-"""Signer daemon over HTTP. Phase 3, owner: Core.
+"""Signer daemon over HTTP.
 
 The agent key is loaded from AGENT_SEED and never returned by any endpoint.
 The verifier in fuse/signer/daemon.py is called, not modified.

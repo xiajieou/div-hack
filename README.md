@@ -6,15 +6,13 @@ The agent can propose payments all day, but it can never sign one alone. Two ind
 
 Built for DivHacks 2026, Ripple track: Best Agentic Finance Infrastructure on XRPL.
 
-<!-- Add docs/system-design.png back here once the build matches the target design (separate spend account, break-glass file, dashboard). -->
-
 ## How it works
 
 Three programs, each holding at most one key:
 
 - **Reader**: reads an invoice and turns it into a request: vendor, amount, invoice ID. It is assumed to be fooled, so it holds no keys and never chooses where money goes.
 - **Signer daemon**: holds the agent key. It remembers each request and signs only a payment that matches it exactly.
-- **Policy service**: holds the policy key. It checks the rules (known vendor, allowed country, open purchase order, no duplicate, per-payment and daily caps, rate limit), builds the payment itself with the destination taken from its own vendor records, collects the daemon's signature, adds its own, submits, and logs.
+- **Policy service**: holds the policy key. It checks the rules (known vendor, an accepted credential from the vendor registry, allowed country, open purchase order, no duplicate, per-payment and daily caps, rate limit), builds the payment itself with the destination taken from its own vendor records, collects the daemon's signature, adds its own, submits, and logs. The daemon keeps its own vendor list, which the policy service cannot change.
 
 On the ledger:
 
@@ -75,9 +73,9 @@ Fuse runs on **XRPL devnet, in XRP**. Permission Delegation, which the desk depe
 | Separate spend account, refilled by hand from a treasury | In progress; payments currently come from a single account |
 | Pre-signed break-glass file (kill switch that needs no key) | In progress; the demo currently revokes with the account key |
 | One-command devnet setup | In progress |
-| Reader as its own process watching `inbox/` | In progress |
+| Reader as its own process watching `inbox/` | Working (`make reader`) |
 | Dashboard | Working on the local ledger; kill switch button waits for the break-glass file |
-| Vendor credentials from an on-ledger registry | Planned, optional |
+| Vendor credentials from an on-ledger registry | Working on the local ledger; not yet issued on devnet |
 
 ## Team
 
