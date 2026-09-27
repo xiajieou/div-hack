@@ -134,7 +134,7 @@ class PolicyService:
                     policy_signed = sign(base, self._wallet, multisign=True)
                     combined = multisign(base, [Payment.from_xrpl(agent_signed), policy_signed]).to_xrpl()
                     result = self.ledger.submit(combined)
-                    self.audit.append_result(commitment, result.hash, result.engine_result, result.message)
+                    self.audit.append_result(commitment, result.hash, result.engine_result, public_text(result.message))
 
                     if result.ok:
                         self.budget.settle(reservation)

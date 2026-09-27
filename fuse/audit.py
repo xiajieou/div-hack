@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -36,18 +37,20 @@ class AuditChain:
     def __init__(self, policy_hash: str) -> None:
         self.policy_hash = policy_hash
         self.rows: List[Row] = []
+        self._lock = threading.Lock()
 
     @property
     def head(self) -> str:
         return self.rows[-1].hash if self.rows else GENESIS
 
     def _append(self, kind: str, record: dict) -> Row:
-        record = dict(record)
-        record["kind"] = kind
-        record["policy_hash"] = self.policy_hash
-        row = Row(kind, record, self.head, _h(self.head, record))
-        self.rows.append(row)
-        return row
+        with self._lock:
+            record = dict(record)
+            record["kind"] = kind
+            record["policy_hash"] = self.policy_hash
+            row = Row(kind, record, self.head, _h(self.head, record))
+            self.rows.append(row)
+            return row
 
     def commit_proposal(self, proposal: dict) -> str:
         """Called BEFORE submission. The returned hash goes into the payment memo."""

@@ -244,6 +244,25 @@ def test_ac11_audit_chain_verifies_and_detects_tamper(world):
     assert not ok and "altered" in msg
 
 
+def test_audit_appends_are_serialised_under_concurrency(world):
+    service = world["service"]
+    audit = service.audit
+    before = len(audit.rows)
+    barrier = threading.Barrier(8)
+
+    def worker():
+        barrier.wait()
+        for _ in range(20):
+            audit.refused({"vendor": "x"}, ["x"])
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    ok, msg = audit.verify(service.memos_by_tx_hash)
+    assert ok, msg
+    assert len(audit.rows) == before + 8 * 20
+
+
 def test_ac11_memo_carries_commitment_made_before_submission(world):
     o = run_intent(world, vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201")
     vendor = world["policy"].allowlist["Verdant Print Co"]
