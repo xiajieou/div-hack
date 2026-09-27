@@ -557,6 +557,11 @@ class Flow:
         honest = address == self.world.ring.northwind.classic_address
         if honest and self._inv("inv_5510_northwind.txt") in self.world.service.paid_invoices:
             return {"kind": "info", "title": "Northwind is already approved and paid", "text": "Press Reset to try this again."}
+        listed = self.world.policy.allowlist.get("Northwind Freight")
+        if honest and listed and listed.address != address:
+            return {"kind": "info", "title": "Northwind is listed with the corrupt admin's address",
+                    "text": "The Corrupt admin scene put the attacker's address on the list, and a listed record is never "
+                            "replaced, so the credential rule keeps refusing Northwind. Press Reset to start over."}
         parked = any(i.vendor == "Northwind Freight" for i in self.world.service.parked.values())
         if not parked and "Northwind Freight" not in self.world.policy.allowlist:
             self.invoice("inv_5510_northwind.txt")
