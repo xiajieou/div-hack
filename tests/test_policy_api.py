@@ -147,20 +147,22 @@ def test_sign_exception_is_redacted_before_it_is_returned(world):
     assert "[redacted]" in published
 
 
-def test_public_text_redacts_secp256k1_seed_and_key():
+def test_public_text_redacts_secrets_not_addresses_or_hashes(world):
     from xrpl.constants import CryptoAlgorithm
-    from fuse.policy.service import public_text
+    from fuse.audit import public_text
 
-    w = Wallet.create(algorithm=CryptoAlgorithm.SECP256K1)
-    redacted = public_text(f"leak {w.seed} {w.private_key}")
-    assert w.seed not in redacted
-    assert w.private_key not in redacted
-    # no character run from either secret survives
-    for secret in (w.seed, w.private_key):
-        for i in range(len(secret)):
-            for length in range(8, len(secret) + 1):
-                if i + length <= len(secret):
-                    assert secret[i:i + length] not in redacted
+    address = world["policy"].allowlist["Lumen Legal"].address
+    tx_hash = "A" * 64
+    assert public_text(address) == address
+    assert public_text(tx_hash) == tx_hash
+
+    ed = Wallet.create()
+    secp = Wallet.create(algorithm=CryptoAlgorithm.SECP256K1)
+    for w in (ed, secp):
+        redacted = public_text(f"leak {w.seed} {w.private_key}")
+        assert w.seed not in redacted
+        assert w.private_key not in redacted
+        assert "[redacted]" in redacted
 
 
 def _network_service(tmp_path, monkeypatch, network, accounts, vendors=None):

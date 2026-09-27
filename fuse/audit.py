@@ -12,12 +12,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 GENESIS = "0" * 64
+_B58 = r"1-9A-HJ-NP-Za-km-z"
+_HEX = r"0-9A-Fa-f"
+# whole XRPL seeds and private keys only; lookarounds stop mid-address / mid-hex matches
+_SECRET = re.compile(
+    rf"(?<![{_B58}])(?:sEd[{_B58}]{{28}}|s[{_B58}]{{28,29}})(?![{_B58}])|"
+    rf"(?<![{_HEX}])(?:ED[{_HEX}]{{64}}|00[{_HEX}]{{64}})(?![{_HEX}])"
+)
+
+
+def public_text(text: str) -> str:
+    """Exception and ledger messages are returned over HTTP and written to the audit log."""
+    return _SECRET.sub("[redacted]", text)
 
 
 def _h(prev: str, record: dict) -> str:

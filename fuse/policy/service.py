@@ -1,7 +1,6 @@
 """PolicyService: holds the policy key, builds every transaction, countersigns, submits. Contains no model."""
 from __future__ import annotations
 
-import re
 import threading
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -14,7 +13,7 @@ from xrpl.models.transactions import Payment
 from xrpl.transaction import multisign, sign
 from xrpl.wallet import Wallet
 
-from ..audit import AuditChain
+from ..audit import AuditChain, public_text
 from ..budget import Budget, BudgetError
 from ..config import Policy, VendorRecord, drops_to_xrp, xrp_to_drops
 from .builder import build_payment, same_transaction, strip_signatures
@@ -23,15 +22,6 @@ from .rules import Evaluation, Intent, evaluate
 
 MULTISIGN_FEE_DROPS = 36        # base fee x (1 + 2 signers), rounded up
 LAST_LEDGER_WINDOW = 40
-# any XRPL seed (ed25519 sEd..., secp256k1 s...); ED-prefixed and 00-prefixed private keys
-_SECRET = re.compile(
-    r"sEd[1-9A-HJ-NP-Za-km-z]{28}|s[1-9A-HJ-NP-Za-km-z]{28,29}|ED[0-9A-Fa-f]{64}|00[0-9A-Fa-f]{64}"
-)
-
-
-def public_text(text: str) -> str:
-    """Exception and ledger messages are returned over HTTP and written to the audit log."""
-    return _SECRET.sub("[redacted]", text)
 
 
 @dataclass

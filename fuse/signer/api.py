@@ -18,8 +18,8 @@ from xrpl.models.transactions import Payment
 from xrpl.wallet import Wallet
 
 from ..config import default_policy
+from ..audit import public_text
 from ..policy.rules import Intent
-from ..policy.service import public_text
 from .daemon import Refusal, SignerDaemon
 
 
