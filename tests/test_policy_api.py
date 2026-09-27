@@ -163,10 +163,14 @@ def test_public_text_redacts_secp256k1_seed_and_key():
                     assert secret[i:i + length] not in redacted
 
 
-def _network_service(tmp_path, monkeypatch, network, accounts):
+def _network_service(tmp_path, monkeypatch, network, accounts, vendors=None):
+    from fuse.config import default_policy
     monkeypatch.chdir(tmp_path)
     (tmp_path / "env").mkdir(exist_ok=True)
     (tmp_path / "env" / "accounts.json").write_text(json.dumps(accounts))
+    if vendors is None:
+        vendors = {name: f"rVendor{i}" for i, name in enumerate(default_policy().allowlist)}
+    (tmp_path / "env" / "vendors.json").write_text(json.dumps(vendors))
     monkeypatch.setenv("NETWORK", network)
     monkeypatch.setenv("POLICY_SEED", Wallet.create().seed)
     monkeypatch.delenv("DAEMON_URL", raising=False)
@@ -188,6 +192,14 @@ def test_network_mode_pays_from_the_spend_account_never_the_treasury(tmp_path, m
     without_spend = {k: v for k, v in NETWORK_ACCOUNTS.items() if k != "spend"}
     with pytest.raises(KeyError, match="spend"):
         _network_service(tmp_path, monkeypatch, "devnet", without_spend)
+
+
+def test_network_mode_loads_vendor_addresses_from_vendors_file(tmp_path, monkeypatch):
+    from fuse.config import default_policy
+    vendors = {name: Wallet.create().classic_address for name in default_policy().allowlist}
+    service = _network_service(tmp_path, monkeypatch, "devnet", NETWORK_ACCOUNTS, vendors=vendors)
+    for name, record in service.policy.allowlist.items():
+        assert record.address == vendors[name]
 
 
 @pytest.mark.parametrize("value", [None, "local"])

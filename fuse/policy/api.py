@@ -142,6 +142,11 @@ def _service_from_env() -> PolicyService:
             raise SystemExit(f"env/accounts.json was written for {accounts['network']}, NETWORK is {network}")
         wallet = Wallet.from_seed(os.environ["POLICY_SEED"])
         policy = default_policy()
+        vendors = json.loads(Path("env/vendors.json").read_text())
+        for name in policy.allowlist:
+            if name not in vendors:
+                raise SystemExit(f"env/vendors.json is missing allowlist vendor {name!r}")
+            policy.allowlist[name].address = vendors[name]
         audit = AuditChain(policy.hash())
         service = PolicyService(policy, wallet, TestnetLedger(rpc), accounts["spend"], accounts["desk"], audit, accounts.get("registry"))
     elif daemon_url:
