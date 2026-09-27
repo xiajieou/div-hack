@@ -561,7 +561,7 @@ async function refresh() {
   const labels = { "reader": "Reader fooled", "agent key": "Agent key", "policy key": "Policy key", "agent+policy keys": "Both keys", "spend account key": "Paying account key", "treasury key": "Treasury key" };
   const blast = snap.blast.rows.map((r) => `<tr><td>${esc(labels[r.part] || r.part)}</td><td class="num ${r.max_loss_drops === 0 ? "zero" : ""}">${xrp(r.max_loss_drops / 1e6)}</td></tr>`).join("");
   const findings = snap.blast.findings.length ? `<div class="find"><ul>${snap.blast.findings.map((f) => `<li>${esc(f)}</li>`).join("")}</ul></div>`
-    : `<div class="find ok">&#10003; No setup mistakes found${snap.delegation ? "" : ". The desk's permission is revoked, so both keys together can move nothing"}.</div>`;
+    : `<div class="find ok">&#10003; No setup mistakes found${snap.delegation ? "" : ". The desk's permission is revoked, so both keys can move only the desk's own fee budget"}.</div>`;
   if (blast + findings !== lastBlast) { $("blast").innerHTML = blast; $("findings").innerHTML = findings; if (lastBlast) flash("blast-panel"); lastBlast = blast + findings; }
   const a = snap.audit, map = { [snap.blast.accounts.spend.address]: "paying account" };
   const audit = `<div class="big">${a.outgoing - a.unlogged.length} of ${a.outgoing}</div><div class="muted" style="font-size:13px">payments out of the paying account${snap.network !== "local" ? " since this session started" : ""} are in our audit log</div>` +

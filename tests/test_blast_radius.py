@@ -89,3 +89,21 @@ def test_local_ledger_setup_has_no_findings():
     rows, findings = blast_radius(read_snapshot(world, world.addresses))
     assert findings == []
     assert {r.part: r.max_loss_drops for r in rows}["agent key"] == 0
+
+
+def test_desk_balance_is_within_reach_of_both_keys():
+    snap = {**CLEAN, "desk": {**CLEAN["desk"], "balance_drops": 6_200_000}}
+    rows, findings = blast_radius(snap)
+    loss = {r.part: r.max_loss_drops for r in rows}
+    assert findings == []
+    assert loss["agent key"] == 0 and loss["policy key"] == 0
+    assert loss["agent+policy keys"] == 30_000_000 + 6_200_000
+    revoked = {**snap, "spend": {**snap["spend"], "delegations": {}}}
+    loss = {r.part: r.max_loss_drops for r in blast_radius(revoked)[0]}
+    assert loss["agent+policy keys"] == 6_200_000
+
+
+def test_a_finding_puts_the_desk_balance_within_one_key():
+    snap = {**CLEAN, "desk": {**CLEAN["desk"], "quorum": 1, "balance_drops": 6_200_000}}
+    loss = {r.part: r.max_loss_drops for r in blast_radius(snap)[0]}
+    assert loss["agent key"] == 30_000_000 + 6_200_000
