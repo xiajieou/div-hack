@@ -1,8 +1,8 @@
 """Run the Fuse demo.
 
   python -m fuse.demo                      # local mini-ledger, no network, real signatures
-  python -m fuse.demo --mode testnet       # XRPL testnet via the public faucet (first run = the S0 spike)
-  python -m fuse.demo --mode testnet --no-delegation   # multisig-only fallback if the amendment is not enabled
+  python -m fuse.demo --mode devnet        # XRPL devnet via the public faucet; Permission Delegation is enabled there
+  python -m fuse.demo --mode testnet --no-delegation   # multisig-only fallback; testnet refuses DelegateSet with temDISABLED
 
 Beats, in the order the challenge brief's four questions suggest:
   0 setup   1-3 three clean invoices   4 prompt-injected invoice   5 leaked agent key (two rejections by the ledger)

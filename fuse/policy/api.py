@@ -21,7 +21,7 @@ from xrpl.wallet import Wallet
 from ..audit import AuditChain 
 from ..config import default_policy
 from ..ledger.local import LocalLedger
-from ..ledger.testnet import TestnetLedger
+from ..ledger.testnet import DEVNET_RPC, TESTNET_RPC, TestnetLedger
 from ..reports.api import add_routes
 from ..registry import setup_local_registry
 from ..setup import KeyRing, run_setup
@@ -124,14 +124,19 @@ def _write_public_facts(ring: KeyRing, vendors: dict, registry: str) -> None:
     (env / "vendors.json").write_text(json.dumps(vendors, indent=2))
 
 
+# Permission Delegation is enabled on devnet and, as of Sep 26 2026, not on testnet (temDISABLED)
+RPC_BY_NETWORK = {"devnet": DEVNET_RPC, "testnet": TESTNET_RPC}
+
+
 def _service_from_env() -> PolicyService:
     daemon_url = os.environ.get("DAEMON_URL")
-    if os.environ.get("NETWORK") == "testnet":
+    rpc = RPC_BY_NETWORK.get(os.environ.get("NETWORK", "local"))
+    if rpc:
         accounts = json.loads(Path("env/accounts.json").read_text())
         wallet = Wallet.from_seed(os.environ["POLICY_SEED"])
         policy = default_policy()
         audit = AuditChain(policy.hash())
-        service = PolicyService(policy, wallet, TestnetLedger(), accounts["treasury"], accounts["desk"], audit, accounts.get("registry"))
+        service = PolicyService(policy, wallet, TestnetLedger(rpc), accounts["treasury"], accounts["desk"], audit, accounts.get("registry"))
     elif daemon_url:
         service = _local_service(os.environ["AGENT_ADDRESS"])
     else:

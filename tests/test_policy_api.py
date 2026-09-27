@@ -4,7 +4,10 @@ import json
 from fastapi.testclient import TestClient
 from xrpl.core.addresscodec import is_valid_classic_address
 from xrpl.models.transactions import DelegateSet
+from xrpl.wallet import Wallet
 
+from fuse.ledger.local import LocalLedger
+from fuse.ledger.testnet import DEVNET_RPC, TESTNET_RPC
 from fuse.policy.api import DaemonClient, _service_from_env, create_app
 from fuse.policy.rules import Intent
 from fuse.setup import _single_sign
@@ -116,6 +119,35 @@ def test_sign_exception_is_redacted_before_it_is_returned(world):
     assert service._wallet.seed not in published
     assert service._wallet.private_key not in published
     assert "[redacted]" in published
+
+
+def _network_service(tmp_path, monkeypatch, network, accounts):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "env").mkdir(exist_ok=True)
+    (tmp_path / "env" / "accounts.json").write_text(json.dumps(accounts))
+    monkeypatch.setenv("NETWORK", network)
+    monkeypatch.setenv("POLICY_SEED", Wallet.create().seed)
+    monkeypatch.delenv("DAEMON_URL", raising=False)
+    return _service_from_env()
+
+
+def test_network_devnet_uses_the_devnet_rpc(tmp_path, monkeypatch):
+    accounts = {"treasury": "rTreasury", "desk": "rDesk", "registry": "rRegistry"}
+    service = _network_service(tmp_path, monkeypatch, "devnet", accounts)
+    assert service.ledger.rpc_url == DEVNET_RPC
+    assert service.desk == "rDesk" and service.registry == "rRegistry"
+    assert _network_service(tmp_path, monkeypatch, "testnet", accounts).ledger.rpc_url == TESTNET_RPC
+
+
+def test_network_unset_or_unknown_is_local(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DAEMON_URL", raising=False)
+    for value in (None, "local", "mainnet"):
+        if value is None:
+            monkeypatch.delenv("NETWORK", raising=False)
+        else:
+            monkeypatch.setenv("NETWORK", value)
+        assert isinstance(_service_from_env().ledger, LocalLedger)
 
 
 def test_local_mode_with_daemon_url_publishes_facts_and_no_seed(tmp_path, monkeypatch):
