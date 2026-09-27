@@ -1,6 +1,7 @@
 """PolicyService: holds the policy key, builds every transaction, countersigns, submits. Contains no model."""
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -21,6 +22,13 @@ from .rules import Evaluation, Intent, evaluate
 
 MULTISIGN_FEE_DROPS = 36        # base fee x (1 + 2 signers), rounded up
 LAST_LEDGER_WINDOW = 40
+# ed25519 seeds start with sEd; the private key is 66 hex chars starting with ED
+_SECRET = re.compile(r"sEd[1-9A-HJ-NP-Za-km-z]{28}|ED[0-9A-Fa-f]{64}")
+
+
+def public_text(text: str) -> str:
+    """Exception and ledger messages are returned over HTTP and written to the audit log."""
+    return _SECRET.sub("[redacted]", text)
 
 
 @dataclass
@@ -104,7 +112,7 @@ class PolicyService:
                     agent_signed = self.daemon.sign(built, intent.nonce)
                 except Exception as e:
                     self.budget.release(reservation)
-                    failed = [str(e)]
+                    failed = [public_text(str(e))]
                     self.audit.refused(intent.public(), failed, {"commitment": commitment})
                     return self._done(intent, Outcome("refused", intent.public(), rules, failed, commitment=commitment,
                                                       message="The signer daemon would not sign."))
@@ -132,7 +140,7 @@ class PolicyService:
                 self.budget.release(reservation)
                 return self._done(intent, Outcome("rejected_by_ledger", intent.public(), rules, [f"ledger: {result.engine_result}"],
                                                   tx_hash=result.hash, engine_result=result.engine_result, commitment=commitment,
-                                                  message=f"Both signatures were valid; the ledger said {result.engine_result}. {result.message}"))
+                                                  message=f"Both signatures were valid; the ledger said {result.engine_result}. {public_text(result.message)}"))
             finally:
                 self.in_flight.discard(intent.invoice_id)
 

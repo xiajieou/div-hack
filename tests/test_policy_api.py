@@ -97,6 +97,25 @@ def test_known_seed_absent_from_status_and_intent(world):
     world["daemon"].register(intent)
     posted = client.post("/intent", json=intent.public())
     assert seed not in posted.text
+    assert "TxnSignature" not in posted.text
+    after = client.get("/status")
+    assert seed not in after.text and "TxnSignature" not in after.text
+
+
+def test_sign_exception_is_redacted_before_it_is_returned(world):
+    service = world["service"]
+    secret = f"sign failed {service._wallet.seed} {service._wallet.private_key}"
+
+    def explode(tx, nonce):
+        raise RuntimeError(secret)
+
+    service.daemon.sign = explode
+    outcome = service.handle_intent(Intent(vendor="Verdant Print Co", amount="12.40", invoice_id="INV-2201"))
+    assert outcome.status == "refused"
+    published = json.dumps(outcome.failed) + json.dumps(service.audit.dump())
+    assert service._wallet.seed not in published
+    assert service._wallet.private_key not in published
+    assert "[redacted]" in published
 
 
 def test_local_mode_with_daemon_url_publishes_facts_and_no_seed(tmp_path, monkeypatch):
