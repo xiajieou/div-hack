@@ -104,34 +104,33 @@ def test_ac06_duplicate_invoice_refused(world):
     assert o.status == "refused" and any("already paid" in f for f in o.failed)
 
 
-def test_ac06_duplicate_invoice_refused_under_concurrency():
-    policy = default_policy()
-    ledger = LocalLedger()
-    ring = KeyRing.local(ledger, policy)
-    run_setup(ledger, ring, delegation=True)
-    registry = setup_local_registry(ledger, [*ring.vendors.values(), ring.northwind])
-    audit = AuditChain(policy.hash())
-    service = PolicyService(policy, ring.policy, ledger, ring.treasury.classic_address, ring.desk.classic_address, audit,
-                            registry.classic_address)
-    daemon = SignerDaemon(ring.agent, ring.treasury.classic_address, ring.desk.classic_address,
-                          {name: w.classic_address for name, w in ring.vendors.items()}, policy.fee_cap_drops,
-                          forward=service.handle_intent)
-    service.attach_daemon(daemon)
-    vendor_addr = ring.vendors["Harbor Cloud Hosting"].classic_address
+@pytest.mark.parametrize("world", ["direct"], indirect=True)
+def test_ac06_duplicate_invoice_refused_under_concurrency(world, monkeypatch):
+    # http/two-apps use TestClient; not safe to drive from worker threads
+    service = world["service"]
+    daemon = world["daemon"]
+    vendor_addr = world["policy"].allowlist["Harbor Cloud Hosting"].address
+    n = 6
+    barrier = threading.Barrier(n)
+    real_reserve = service.budget.reserve
+
+    def gated_reserve(drops):
+        barrier.wait()
+        return real_reserve(drops)
+
+    monkeypatch.setattr(service.budget, "reserve", gated_reserve)
     results = []
-    barrier = threading.Barrier(6)
 
     def worker():
-        barrier.wait()
         it = Intent(vendor="Harbor Cloud Hosting", amount="1.00", invoice_id="INV-7734")
         nonce = daemon.register(it)
         results.append(service.outcomes[nonce])
 
-    threads = [threading.Thread(target=worker) for _ in range(6)]
+    threads = [threading.Thread(target=worker) for _ in range(n)]
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert sum(1 for o in results if o.status == "paid") == 1
-    assert len([h for h in ledger.history if h.get("destination") == vendor_addr]) == 1
+    assert len([h for h in world["ledger"].history if h.get("destination") == vendor_addr]) == 1
 
 
 # ---------- AC7: unknown destination parks; admin add-vendor reruns through the normal flow ----------
@@ -244,20 +243,34 @@ def test_ac11_audit_chain_verifies_and_detects_tamper(world):
     assert not ok and "altered" in msg
 
 
-def test_audit_appends_are_serialised_under_concurrency(world):
+def test_audit_appends_are_serialised_under_concurrency(world, monkeypatch):
+    import sys
+    import time
+    import fuse.audit as audit_mod
     service = world["service"]
     audit = service.audit
     before = len(audit.rows)
     barrier = threading.Barrier(8)
+    real_h = audit_mod._h
 
-    def worker():
-        barrier.wait()
-        for _ in range(20):
-            audit.refused({"vendor": "x"}, ["x"])
+    def yielding_h(prev, record):
+        time.sleep(0)
+        return real_h(prev, record)
 
-    threads = [threading.Thread(target=worker) for _ in range(8)]
-    [t.start() for t in threads]
-    [t.join() for t in threads]
+    monkeypatch.setattr(audit_mod, "_h", yielding_h)
+    prev_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        def worker():
+            barrier.wait()
+            for _ in range(20):
+                audit.refused({"vendor": "x"}, ["x"])
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+    finally:
+        sys.setswitchinterval(prev_interval)
     ok, msg = audit.verify(service.memos_by_tx_hash)
     assert ok, msg
     assert len(audit.rows) == before + 8 * 20
