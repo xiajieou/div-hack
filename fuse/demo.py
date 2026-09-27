@@ -24,6 +24,7 @@ from .audit import AuditChain
 from .config import VendorRecord, default_policy
 from .ledger.local import LocalLedger
 from .policy.builder import build_payment
+from .policy.rules import Intent
 from .policy.service import MULTISIGN_FEE_DROPS, PolicyService
 from .reader.reader import INVOICES, hidden_text, pick_extractor, write_fixtures
 from .registry import setup_local_registry
@@ -171,6 +172,15 @@ def main(argv=None) -> int:
     reruns = service.admin_add_vendor("Northwind Freight", ring.northwind.classic_address, "US", actor="cfo@company")
     for o2 in reruns:
         show_outcome(o2, ledger)
+
+    # ----- beat 7b: corrupt admin -----
+    banner("7b", "Corrupt admin: a fake vendor added to both lists, pointed at the attacker")
+    print("  → an insider with admin rights adds 'Acme Consulting' to the allowlist and the daemon directory, address = attacker")
+    daemon.add_vendor("Acme Consulting", ring.attacker.classic_address)
+    service.admin_add_vendor("Acme Consulting", ring.attacker.classic_address, "US", actor="insider@company")
+    nonce = daemon.register(Intent(vendor="Acme Consulting", amount="9.00", invoice_id="INV-6001", reason="consulting, September"))
+    show_outcome(service.outcomes[nonce], ledger)
+    print("  → the registry never issued a credential to that address. One insider is not enough; the rule is code, not a setting.")
 
     # ----- beat 8: kill switch -----
     banner(8, "Kill switch: the treasury revokes the delegation, then a valid double-signed payment is attempted")

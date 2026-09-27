@@ -58,6 +58,7 @@ def default_policy() -> Policy:
         "INV-5510": "PO-124",
         "INV-3300": "PO-130",
         "INV-9001": "PO-140",
+        "INV-6001": "PO-150",
     }
     return p
 
