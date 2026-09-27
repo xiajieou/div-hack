@@ -1,4 +1,5 @@
 """Vendor credentials: Credential entries on the local ledger and the policy hook that reads them."""
+import pytest
 from xrpl.models.transactions import CredentialAccept, CredentialCreate, CredentialDelete
 from xrpl.wallet import Wallet
 
@@ -124,6 +125,7 @@ def test_credential_deleted_after_acceptance_refuses_again(world):
     assert o.status == "paid", "other vendors are unaffected"
     o = run_intent(world, vendor="Verdant Print Co", amount="5.00", invoice_id="INV-3300")
     assert o.status == "refused" and any("accepted registry credential" in f for f in o.failed)
+    assert world["daemon"].intents[o.intent["nonce"]].signatures_issued == 0
     assert ledger.balance_xrp(verdant.classic_address) == balance_before
 
 
@@ -151,23 +153,56 @@ def test_hook_treats_a_missing_flags_field_as_not_accepted():
     assert not vendor_has_accepted_credential(Ledger(), vendor.classic_address, registry.classic_address)
 
 
-def test_testnet_credentials_reads_account_objects(monkeypatch):
+def test_testnet_credentials_reads_every_page_and_surfaces_a_bad_reply():
     from types import SimpleNamespace
     from fuse.ledger.testnet import TestnetLedger
 
-    entries = [
-        {"LedgerEntryType": "SignerList", "SignerQuorum": 2},
+    creds = [
         {"LedgerEntryType": "Credential", "Subject": "rVendor", "Issuer": "rRegistry", "CredentialType": TYPE_HEX, "Flags": 65536},
+        {"LedgerEntryType": "Credential", "Subject": "rVendor", "Issuer": "rOther", "CredentialType": TYPE_HEX, "Flags": 65536},
+    ]
+    pages = [
+        {"account_objects": [{"LedgerEntryType": "SignerList"}, creds[0]], "marker": "page-2"},
+        {"account_objects": [creds[1]]},
     ]
 
     class FakeClient:
+        def __init__(self):
+            self.n = 0
+
         def request(self, req):
             assert req.account == "rVendor" and req.type == "credential"
-            return SimpleNamespace(result={"account_objects": entries})
+            assert req.marker == (None if self.n == 0 else "page-2")
+            page = pages[self.n]
+            self.n += 1
+            return SimpleNamespace(result=page)
 
     ledger = TestnetLedger.__new__(TestnetLedger)
     ledger.client = FakeClient()
-    assert ledger.credentials("rVendor") == [entries[1]]
+    assert ledger.credentials("rVendor") == creds
+
+    ledger.client = type("Bad", (), {"request": lambda self, req: SimpleNamespace(result={"error": "actNotFound"})})()
+    with pytest.raises(KeyError):
+        ledger.credentials("rVendor")
+
+
+def test_hook_rejects_wrong_subject_and_expired_credentials():
+    registry, vendor = Wallet.create(), Wallet.create()
+    good = {"Subject": vendor.classic_address, "Issuer": registry.classic_address,
+            "CredentialType": CREDENTIAL_TYPE_HEX, "Flags": LSF_ACCEPTED}
+
+    class Ledger:
+        def __init__(self, entries):
+            self.entries = entries
+
+        def credentials(self, address):
+            return self.entries
+
+    assert vendor_has_accepted_credential(Ledger([good]), vendor.classic_address, registry.classic_address)
+    wrong_subject = dict(good, Subject=Wallet.create().classic_address)
+    assert not vendor_has_accepted_credential(Ledger([wrong_subject]), vendor.classic_address, registry.classic_address)
+    expired = dict(good, Expiration=1)  # one second after 2000-01-01, long past
+    assert not vendor_has_accepted_credential(Ledger([expired]), vendor.classic_address, registry.classic_address)
 
 
 def test_hook_needs_registry_issuer_type_and_flag():

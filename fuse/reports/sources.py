@@ -87,7 +87,7 @@ class LocalWorld(LedgerSource):
         self.ledger.fund(treasury, 1_000_000_000)
         self.addresses = {"treasury": treasury, "spend": spend, "desk": desk}
         self.audit = AuditChain(self.policy.hash())
-        registry = setup_local_registry(self.ledger, ring.vendors.values())
+        registry = setup_local_registry(self.ledger, [*ring.vendors.values(), ring.northwind])
         self.service = PolicyService(self.policy, ring.policy, self.ledger, spend, desk, self.audit, registry.classic_address)
         self.daemon = SignerDaemon(ring.agent, spend, desk, {name: w.classic_address for name, w in ring.vendors.items()},
                                    self.policy.fee_cap_drops, forward=self.service.handle_intent)
