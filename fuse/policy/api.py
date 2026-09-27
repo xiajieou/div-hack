@@ -12,7 +12,7 @@ import httpx
 from fastapi import Body, FastAPI 
 from fastapi.responses import JSONResponse
 from .rules import Intent
-from .service import PolicyService
+from .service import AdminError, PolicyService
 import json 
 import os 
 from pathlib import Path
@@ -75,7 +75,7 @@ def create_app(service: PolicyService) -> FastAPI:
     def admin_vendor(body: dict = Body()):
         try:
             reruns = service.admin_add_vendor(body["name"], body["address"], body["jurisdiction"], body.get("actor", "human"))
-        except ValueError as exc:
+        except AdminError as exc:
             return JSONResponse(status_code=400, content={"detail": str(exc)})
         return [dataclasses.asdict(o) for o in reruns]
 

@@ -24,6 +24,10 @@ MULTISIGN_FEE_DROPS = 36        # base fee x (1 + 2 signers), rounded up
 LAST_LEDGER_WINDOW = 40
 
 
+class AdminError(Exception):
+    pass
+
+
 @dataclass
 class Outcome:
     status: str                       # paid | refused | parked | rejected_by_ledger | error
@@ -154,9 +158,9 @@ class PolicyService:
     # ----- admin path (logged, human-only) -----
     def admin_add_vendor(self, name: str, address: str, jurisdiction: str, actor: str = "human") -> List[Outcome]:
         if name in self.policy.allowlist:
-            raise ValueError("vendor already listed; adding a vendor never replaces a record")
+            raise AdminError("vendor already listed; adding a vendor never replaces a record")
         if not is_valid_classic_address(address):
-            raise ValueError(f"invalid classic address: {address}")
+            raise AdminError(f"invalid classic address: {address}")
         self.policy.allowlist[name] = VendorRecord(name, address, jurisdiction)
         self.audit.admin("add_vendor", {"actor": actor, "vendor": name, "address": address, "jurisdiction": jurisdiction,
                                          "new_policy_hash": self.policy.hash()})
