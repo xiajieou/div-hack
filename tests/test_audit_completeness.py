@@ -8,7 +8,7 @@ HISTORY = [
     {"type": "Payment", "account": SPEND, "delegate": "rDesk", "destination": "rVendorA", "result": "tesSUCCESS", "hash": "H3", "amount_drops": 12_400_000},  # logged
     {"type": "Payment", "account": SPEND, "delegate": "rDesk", "destination": "rAttacker", "result": "tesSUCCESS", "hash": "H4", "amount_drops": 9_000_000},  # attacker, unlogged
     {"type": "Payment", "account": SPEND, "delegate": "rDesk", "destination": "rAttacker", "result": "tecUNFUNDED_PAYMENT", "hash": "H5", "amount_drops": 9_000_000},  # failed, ignored
-    {"type": "SignerListSet", "account": SPEND, "delegate": "rDesk", "destination": "", "result": "tecNO_DELEGATE_PERMISSION", "hash": "H6", "amount_drops": 0},
+    {"type": "TicketCreate", "account": SPEND, "delegate": None, "destination": "", "result": "tesSUCCESS", "hash": "H6", "amount_drops": 0},  # setup, not a payment
     {"type": "Payment", "account": SPEND, "delegate": "rDesk", "destination": "rVendorB", "result": "tesSUCCESS", "hash": "H7", "amount_drops": 5_000_000},   # unlogged (log lost it)
 ]
 LOG = {"H3"}
@@ -27,8 +27,8 @@ def test_incoming_topup_is_never_flagged():
     assert all(m["hash"] != "H2" for m in unlogged_payments(HISTORY, set(), SPEND))
 
 
-def test_failed_attempts_are_never_flagged():
-    assert all(m["hash"] not in ("H5", "H6") for m in unlogged_payments(HISTORY, set(), SPEND))
+def test_failed_attempts_and_setup_transactions_are_never_flagged():
+    assert all(m["hash"] not in ("H1", "H5", "H6") for m in unlogged_payments(HISTORY, set(), SPEND))
 
 
 def test_order_is_history_order():
