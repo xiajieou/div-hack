@@ -169,10 +169,9 @@ def _network_service(tmp_path, monkeypatch, network, accounts, allowlist=None):
     from fuse.config import default_policy
     monkeypatch.chdir(tmp_path)
     (tmp_path / "env").mkdir(exist_ok=True)
-    (tmp_path / "env" / "accounts.json").write_text(json.dumps(accounts))
     if allowlist is None:
         allowlist = {name: Wallet.create().classic_address for name in default_policy().allowlist}
-    (tmp_path / "env" / "allowlist.json").write_text(json.dumps(allowlist))
+    (tmp_path / "env" / "accounts.json").write_text(json.dumps({**accounts, "vendors": allowlist}))
     monkeypatch.setenv("NETWORK", network)
     monkeypatch.setenv("POLICY_SEED", Wallet.create().seed)
     monkeypatch.delenv("DAEMON_URL", raising=False)
@@ -196,7 +195,7 @@ def test_network_mode_pays_from_the_spend_account_never_the_treasury(tmp_path, m
         _network_service(tmp_path, monkeypatch, "devnet", without_spend)
 
 
-def test_network_mode_loads_vendor_addresses_from_allowlist_file(tmp_path, monkeypatch):
+def test_network_mode_loads_vendor_addresses_from_the_setup_file(tmp_path, monkeypatch):
     from fuse.config import default_policy
     allowlist = {name: Wallet.create().classic_address for name in default_policy().allowlist}
     service = _network_service(tmp_path, monkeypatch, "devnet", NETWORK_ACCOUNTS, allowlist=allowlist)
@@ -247,10 +246,9 @@ def test_local_mode_with_daemon_url_publishes_facts_and_no_seed(tmp_path, monkey
     assert service.ledger.accounts[service.desk].signer_entries == {agent: 1, service._wallet.classic_address: 1}
     accounts = json.loads((tmp_path / "env" / "accounts.json").read_text())
     vendors = json.loads((tmp_path / "env" / "vendors.json").read_text())
-    allowlist = json.loads((tmp_path / "env" / "allowlist.json").read_text())
     assert accounts["treasury"] == service.treasury and accounts["desk"] == service.desk
     expected = {name: v.address for name, v in service.policy.allowlist.items()}
-    assert vendors == expected and allowlist == expected
+    assert vendors == expected and accounts.pop("vendors") == expected
     # public facts only: a fixed key set, and every value is a classic address, never a seed or key
     assert set(accounts) == {"network", "treasury", "spend", "desk", "policy", "registry", "attacker", "northwind"}
     assert accounts["spend"] == service.treasury

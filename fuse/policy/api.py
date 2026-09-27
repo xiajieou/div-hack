@@ -125,11 +125,11 @@ def _write_public_facts(ring: KeyRing, vendors: dict, registry: str) -> None:
         "registry": registry,
         "attacker": ring.attacker.classic_address,
         "northwind": ring.northwind.classic_address,
+        "vendors": vendors,
     }
     (env / "accounts.json").write_text(json.dumps(accounts, indent=2))
-    payload = json.dumps(vendors, indent=2)
-    (env / "vendors.json").write_text(payload)
-    (env / "allowlist.json").write_text(payload)
+    # the daemon's own directory; the policy never reads this file
+    (env / "vendors.json").write_text(json.dumps(vendors, indent=2))
 
 
 RPC_BY_NETWORK = {"devnet": DEVNET_RPC, "testnet": TESTNET_RPC}
@@ -145,14 +145,14 @@ def _service_from_env() -> PolicyService:
             raise SystemExit(f"env/accounts.json was written for {accounts['network']}, NETWORK is {network}")
         wallet = Wallet.from_seed(os.environ["POLICY_SEED"])
         policy = default_policy()
-        allowlist_path = Path(os.environ.get("POLICY_ALLOWLIST_FILE", "env/allowlist.json"))
-        allowlist = json.loads(allowlist_path.read_text())
+        # setup writes the vendor addresses here; the daemon reads its own env/vendors.json
+        allowlist = accounts.get("vendors", {})
         for name in policy.allowlist:
             if name not in allowlist:
-                raise SystemExit(f"{allowlist_path} is missing allowlist vendor {name!r}")
+                raise SystemExit(f"env/accounts.json vendors block is missing {name!r}")
             address = allowlist[name]
             if not is_valid_classic_address(address):
-                raise SystemExit(f"{allowlist_path} has invalid address for vendor {name!r}")
+                raise SystemExit(f"env/accounts.json has an invalid address for vendor {name!r}")
             policy.allowlist[name].address = address
         audit = AuditChain(policy.hash())
         service = PolicyService(policy, wallet, TestnetLedger(rpc), accounts["spend"], accounts["desk"], audit, accounts.get("registry"))
